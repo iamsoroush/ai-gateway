@@ -52,5 +52,6 @@ guess from this file alone.
 ## Gotchas
 - `model` is **optional**: alias → raw name (provider inferred by prefix) → omitted (content-based default: audio→`DEFAULT_AUDIO_MODEL`, else `DEFAULT_MODEL`). *(D4)*
 - **Audio is Gemini-only** for now; audio to a GPT model → `400`. *(api-contract)*
-- `PRICING` rates and `gpt-5.4-nano` are **placeholders** — not real. *(D10, D14)*
+- Cost is **modality-aware** and prices load from `PRICING_SOURCE_URL` (hosted JSON) if set, else the static `PRICING` table; both are **placeholders** — not real. *(D10, D16)*
+- `gpt-5.4-nano` is a **placeholder** model name — possibly not real. *(D14)*
 - Docker host port is **8081**, not 8080. *(D13)*

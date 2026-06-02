@@ -73,8 +73,9 @@ app/
     normalizer.py         # OpenAI request -> canonical + capability checks
     router.py             # provider name -> adapter
     streaming.py          # SSE formatting
-    usage.py              # usage recording, aggregation, cost
+    usage.py              # usage recording, aggregation, modality-aware cost
     usage_store.py        # UsageStore interface + in-memory store
+    pricing.py            # PricingService: hosted-JSON prices, TTL cache, fallback
   utils/                  # logging, ids, media fetch
 examples/openai_sdk_client.py  # runnable examples using the official OpenAI SDK
 tests/                    # health, models, normalizer, chat, providers, sdk-compat
@@ -123,6 +124,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 | `LOG_LEVEL`           | Log level (`DEBUG`/`INFO`/`WARNING`/...)                 | `INFO`             |
 | `DEFAULT_MODEL`       | Model used when `model` is omitted and there is no audio | `gpt-5.4-nano`     |
 | `DEFAULT_AUDIO_MODEL` | Model used when `model` is omitted and audio is present  | `gemini-2.5-flash` |
+| `PRICING_SOURCE_URL`  | Optional hosted JSON of model prices (else the static table) | _(empty)_      |
+| `PRICING_REFRESH_SECONDS` | How often to refresh prices from `PRICING_SOURCE_URL` | `3600`         |
 
 > Never commit a real `.env`. It is git-ignored; commit only `.env.example`.
 
@@ -642,20 +645,42 @@ curl "http://localhost:8081/v1/usage/summary"
 
 ### Pricing
 
-Estimated cost is computed from the `PRICING` table in
-[`app/config.py`](app/config.py) (USD per 1,000,000 tokens, per provider model):
+Rates are USD per 1,000,000 tokens, per provider model. Each side (`input`/`output`)
+is either a **flat number** (same rate for every modality) or a **per-modality map**
+with an optional `default` — so models that charge more for audio/image than text are
+priced correctly:
 
 ```python
+# app/config.py — the static / fallback table
 PRICING = {
-    "gpt-5.4-nano":          {"input": 0.05,  "output": 0.40},
-    "gemini-2.5-flash":      {"input": 0.075, "output": 0.30},
-    "gemini-3.1-flash-lite": {"input": 0.05,  "output": 0.20},
+    "gpt-5.4-nano":     {"input": 0.05, "output": 0.40},          # flat
+    "gemini-2.5-flash": {                                         # per-modality
+        "input":  {"text": 0.075, "image": 0.075, "audio": 0.30, "default": 0.075},
+        "output": {"text": 0.30, "default": 0.30},
+    },
 }
 ```
 
-These are **placeholders** — edit them with your real rates. Cost is computed at
-query time, so changes apply to historical usage too. Tokens for an unpriced
-model contribute `0` to cost.
+Cost is computed **at query time** and is **modality-aware**: each modality bucket of a
+record is priced at its own rate. Tokens for an unpriced model contribute `0`.
+
+**Prices can change, so they're loadable from a hosted JSON you control** instead of only
+the static table. Set `PRICING_SOURCE_URL` (and optionally `PRICING_REFRESH_SECONDS`,
+default 3600) to a JSON document shaped like `PRICING` (optionally wrapped in a top-level
+`"models"` key):
+
+```json
+{ "models": {
+  "gemini-2.5-flash": { "input": {"text": 0.075, "audio": 0.30}, "output": {"text": 0.30} },
+  "gpt-5.4-nano":     { "input": 0.05, "output": 0.40 }
+} }
+```
+
+Remote rates **override** the static table per model; the document is fetched + cached on
+the refresh interval, and on any fetch failure the gateway falls back to the last-known
+(or static) rates so cost estimation never breaks. There is **no first-party pricing API**
+from OpenAI/Google, so this is a document you host (config service / object store / mirror).
+Prices are still **placeholders** — set real values. See `app/services/pricing.py`.
 
 ### Modality breakdown — how it's derived
 

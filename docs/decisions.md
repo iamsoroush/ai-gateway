@@ -83,13 +83,18 @@ unbroken is attributed to `text`.
 keeps the modality view always populated and useful without overstating precision.
 **Consequences.** Image tokens on OpenAI fold into `text` (OpenAI doesn't report them separately).
 
-### D10. Cost via a `PRICING` config table, computed at query time
-**Decision.** `config.PRICING` holds USD-per-1M-token rates per provider model; cost is
-computed when usage is queried, not stored on the record.
-**Why.** Pricing changes should apply to historical usage; keeping rates in config (like
-`MODEL_REGISTRY`) makes them easy to edit and later move to a DB/config service.
-**Consequences.** Rates are **placeholders** (notably the fictional `gpt-5.4-nano`) — set real
-values. Unpriced models contribute `0`.
+### D10. Cost computed at query time, modality-aware
+**Decision.** Cost is computed when usage is queried (not stored on the record), per
+modality: a model's `input`/`output` rate is either a flat USD-per-1M number or a
+`{modality: rate}` map (with optional `default`). `estimate_cost` prices each modality
+bucket of a record separately.
+**Why.** Pricing changes should apply to historical usage; and some models charge
+different rates for audio/image vs text input, so a single blended rate misestimates
+multimodal traffic.
+**Consequences.** Rates are **placeholders** (notably the fictional `gpt-5.4-nano`) — set
+real values. Unpriced models contribute `0`. Where rates are configured as flat numbers,
+modality-aware costing reduces to the old totals × rate (backward compatible). The *source*
+of rates is pluggable — see D16.
 
 ### D11. Consistent error envelope via `GatewayError`
 **Decision.** Domain errors subclass `GatewayError` (carry `status_code`/`type`/`code`); one
@@ -134,6 +139,27 @@ so the route and canonical layer stay provider-agnostic.
 → JSON mode; `{"type":"json_schema",…}` → schema-constrained; `{"type":"text"}`/unknown
 → no constraint (lenient, like other forward-compatible fields). To support a new
 provider's structured output, translate `response_format` inside its adapter.
+
+### D16. Pricing is a pluggable source (hosted JSON), with static fallback
+**Decision.** Prices are resolved through `PricingService`
+([../app/services/pricing.py](../app/services/pricing.py)) on `app.state.pricing`. When
+`PRICING_SOURCE_URL` is set, it fetches a hosted JSON you control, caches it on a TTL
+(`PRICING_REFRESH_SECONDS`), and **remote rates override** the static `config.PRICING`
+table per model. On any fetch/parse failure it keeps the last-known-good (or static)
+rates. The usage endpoints `await pricing.refresh_if_stale()` then pass `pricing.get` as
+the `price_of` lookup into aggregation.
+**Why.** Model prices change over time and shouldn't require a code edit + redeploy. There
+is **no first-party pricing API** from OpenAI/Google (their `/models` endpoints carry no
+prices), so the realistic source is a JSON document you host (config service / object
+store / mirror). The hosted-JSON option was chosen over third-party catalogs (LiteLLM,
+OpenRouter) to avoid an external dependency and provider-name mapping, and to keep control
+of the data in a PHI-adjacent context.
+**Consequences.** Default (no URL) behaves exactly as before — static table only, no
+network. Refresh is lazy (on the first usage request after the TTL elapses) and throttled
+even on failure, so cost estimation never breaks and a broken source isn't hammered. The
+JSON is shaped like `config.PRICING` (optionally under a `"models"` key). Aggregation takes
+`price_of` as a parameter (default `config.get_pricing`) so unit tests price against the
+static table while the route prices against the live service.
 
 ---
 

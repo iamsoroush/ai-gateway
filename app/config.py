@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # audio-capable default; otherwise the general default.
     default_model: str = "gpt-5.4-nano"
     default_audio_model: str = "gemini-2.5-flash"
+    # Optional hosted JSON of model prices (see app/services/pricing.py). When set,
+    # it overrides the static PRICING table below and is refreshed on this interval.
+    # When unset, only the static table is used.
+    pricing_source_url: str | None = None
+    pricing_refresh_seconds: int = 3600
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -80,18 +85,30 @@ def resolve_model(model: str) -> dict[str, str] | None:
     return None
 
 
-# Estimated pricing per provider model, in USD per 1,000,000 tokens.
-# These are PLACEHOLDER rates — set real values for your providers/models.
+# Static / fallback pricing per provider model, in USD per 1,000,000 tokens.
+# This is the seed table and the fallback when no hosted source is configured (or
+# a fetch fails) — see app/services/pricing.py. These are PLACEHOLDER rates.
+#
+# Each side ("input"/"output") is either a flat number (same rate for every
+# modality) OR a per-modality map with an optional "default", e.g.:
+#   "gemini-2.5-flash": {
+#       "input":  {"text": 0.075, "image": 0.075, "audio": 0.30, "default": 0.075},
+#       "output": {"text": 0.30, "default": 0.30},
+#   }
 # Cost is computed at query time, so edits here apply to historical usage too.
-PRICING: dict[str, dict[str, float]] = {
+PRICING: dict[str, dict] = {
     "gpt-5.4-nano": {"input": 0.05, "output": 0.40},
     "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
     "gemini-3.1-flash-lite": {"input": 0.05, "output": 0.20},
 }
 
 
-def get_pricing(provider_model: str) -> dict[str, float] | None:
-    """Return per-1M-token rates for a provider model, or ``None`` if unpriced."""
+def get_pricing(provider_model: str) -> dict | None:
+    """Return static per-1M-token rates for a model, or ``None`` if unpriced.
+
+    This is the fallback lookup; the live, possibly remote-backed lookup is
+    ``app.services.pricing.PricingService.get`` (held on ``app.state.pricing``).
+    """
     return PRICING.get(provider_model)
 
 

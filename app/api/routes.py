@@ -175,8 +175,10 @@ async def usage_stats(
 ) -> UsageStatsResponse:
     """Token usage by provider and modality over a time window, with estimated cost."""
     start, end = _resolve_window(start, end)
+    pricing = request.app.state.pricing
+    await pricing.refresh_if_stale()
     records = _usage_store(request).query(start, end, provider)
-    return aggregate(records, start=start, end=end, interval=interval)
+    return aggregate(records, start=start, end=end, interval=interval, price_of=pricing.get)
 
 
 @router.get("/v1/usage/summary", response_model=UsageSummaryResponse)
@@ -188,5 +190,7 @@ async def usage_summary(
 ) -> UsageSummaryResponse:
     """Overall usage totals plus estimated cost for a time window."""
     start, end = _resolve_window(start, end)
+    pricing = request.app.state.pricing
+    await pricing.refresh_if_stale()
     records = _usage_store(request).query(start, end, provider)
-    return summarize(records, start=start, end=end)
+    return summarize(records, start=start, end=end, price_of=pricing.get)

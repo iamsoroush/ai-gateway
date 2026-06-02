@@ -48,8 +48,9 @@ OpenAI-compatible response / SSE stream to caller
 | [../app/services/normalizer.py](../app/services/normalizer.py) | OpenAI request → canonical; model selection; content-capability validation. |
 | [../app/services/router.py](../app/services/router.py) | Provider name → adapter instance. |
 | [../app/services/streaming.py](../app/services/streaming.py) | OpenAI-style SSE formatting; `UsageCollector` for streaming usage. |
-| [../app/services/usage.py](../app/services/usage.py) | Build/record usage, aggregate by provider/modality/time, estimate cost. |
+| [../app/services/usage.py](../app/services/usage.py) | Build/record usage, aggregate by provider/modality/time, modality-aware cost. |
 | [../app/services/usage_store.py](../app/services/usage_store.py) | `UsageStore` interface + `InMemoryUsageStore`. |
+| [../app/services/pricing.py](../app/services/pricing.py) | `PricingService`: hosted-JSON prices, TTL cache, static fallback. |
 | [../app/utils/](../app/utils/) | `logging` (JSON, PHI-safe), `ids`, `media` (fetch URL / decode `data:` URI). |
 
 ## Request lifecycle (chat completions)
@@ -95,8 +96,12 @@ error event (the HTTP status is already 200 by then).
 - Every successful completion → `UsageRecord` (timestamp, provider, model, tokens,
   per-modality breakdown) stored in `app.state.usage_store`.
 - `/v1/usage` and `/v1/usage/summary` query the store over a time window and aggregate
-  by provider + modality (+ optional time buckets), estimating cost from `PRICING`.
-- **Cost is computed at query time** (not stored), so price edits apply retroactively.
+  by provider + modality (+ optional time buckets), estimating cost via `app.state.pricing`.
+- **Cost is computed at query time** (not stored) and is **modality-aware** — each
+  modality bucket is priced at its own rate (rates may be flat or per-modality). Prices come
+  from `PricingService` ([../app/services/pricing.py](../app/services/pricing.py)): the
+  static `config.PRICING` table by default, or a hosted JSON (`PRICING_SOURCE_URL`) that
+  overrides it, TTL-cached with fallback to last-known/static on failure.
 - Store is **in-memory** today (resets on restart, single-process). Swappable — see below.
 
 ## Error handling
@@ -127,6 +132,8 @@ by a DB/config service without touching callers.
 - **Add a model alias**: add an entry to `MODEL_REGISTRY` (and a `PRICING` row). Available immediately.
 - **Make usage durable**: implement the `UsageStore` interface over SQLite/Postgres and set
   `app.state.usage_store` in `main.py`. Nothing else changes.
+- **Change prices**: edit `config.PRICING` (static), or set `PRICING_SOURCE_URL` to a hosted
+  JSON that overrides it (rates may be flat or per-modality). No code change for rate updates.
 - **Future**: auth middleware, request persistence, quotas, retries/fallback, prompt
   templates — all anticipated; see [decisions.md](decisions.md).
 

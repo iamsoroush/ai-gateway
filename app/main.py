@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from app.api.routes import router
 from app.config import get_settings
 from app.models.errors import ErrorBody, ErrorResponse, GatewayError
+from app.services.pricing import PricingService
 from app.services.router import ProviderRouter
 from app.services.usage_store import InMemoryUsageStore
 from app.utils.logging import configure_logging, get_logger
@@ -28,6 +29,11 @@ app = FastAPI(title="ai-gateway", version="0.1.0")
 app.state.provider_router = ProviderRouter(settings)
 # In-memory MVP usage store; swap for a durable implementation later.
 app.state.usage_store = InMemoryUsageStore()
+# Pricing: static table by default; a hosted JSON when PRICING_SOURCE_URL is set.
+app.state.pricing = PricingService(
+    source_url=settings.pricing_source_url,
+    refresh_seconds=settings.pricing_refresh_seconds,
+)
 
 app.include_router(router)
 

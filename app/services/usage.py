@@ -3,13 +3,16 @@
 Recording: :func:`record_usage` turns a canonical request + provider usage into a
 :class:`UsageRecord` and stores it (never raises into the request path — callers
 wrap it defensively). Aggregation: :func:`aggregate` / :func:`summarize` roll
-records up by provider, modality and (optionally) time bucket, pricing each via
-``config.get_pricing``.
+records up by provider, modality and (optionally) time bucket, pricing each via a
+``price_of`` lookup (defaults to the static ``config.get_pricing``; the route
+passes the live, possibly remote-backed ``PricingService.get``). Cost is
+**modality-aware**: a model's rates may differ by modality (e.g. audio ≠ text).
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from app.config import get_pricing
 from app.models.canonical import CanonicalLLMRequest, CanonicalUsage
@@ -81,14 +84,54 @@ def record_usage(
 # --------------------------------------------------------------------------- #
 
 
-def estimate_cost(provider_model: str, input_tokens: int, output_tokens: int) -> float:
-    pricing = get_pricing(provider_model)
-    if not pricing:
+# A price lookup maps a provider model name to its rate entry (or None).
+PriceOf = Callable[[str], dict | None]
+
+
+def _rate_for(side: object, modality: str) -> float:
+    """Resolve the per-1M rate for a modality on one side (input/output).
+
+    ``side`` is either a flat number (same rate for all modalities) or a
+    ``{modality: rate}`` map with an optional ``"default"``.
+    """
+    if isinstance(side, (int, float)):
+        return float(side)
+    if isinstance(side, dict):
+        if modality in side:
+            return float(side[modality])
+        if "default" in side:
+            return float(side["default"])
+    return 0.0
+
+
+def estimate_cost(
+    rates: dict | None,
+    input_modality_tokens: dict[str, int],
+    output_modality_tokens: dict[str, int],
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> float:
+    """Estimate USD cost from a model's ``rates`` and its token breakdown.
+
+    Prices each modality bucket at its own rate (falling back to a flat rate /
+    ``default`` / text). If no modality breakdown is present, falls back to the
+    plain input/output totals.
+    """
+    if not rates:
         return 0.0
-    return (
-        input_tokens / 1_000_000 * pricing.get("input", 0.0)
-        + output_tokens / 1_000_000 * pricing.get("output", 0.0)
-    )
+    inp, out = rates.get("input"), rates.get("output")
+    cost = 0.0
+    if input_modality_tokens:
+        for modality, tokens in input_modality_tokens.items():
+            cost += tokens / 1_000_000 * _rate_for(inp, modality)
+    else:
+        cost += input_tokens / 1_000_000 * _rate_for(inp, "text")
+    if output_modality_tokens:
+        for modality, tokens in output_modality_tokens.items():
+            cost += tokens / 1_000_000 * _rate_for(out, modality)
+    else:
+        cost += output_tokens / 1_000_000 * _rate_for(out, "text")
+    return cost
 
 
 # --------------------------------------------------------------------------- #
@@ -99,7 +142,8 @@ def estimate_cost(provider_model: str, input_tokens: int, output_tokens: int) ->
 class _Acc:
     """Mutable accumulator; converted to a UsageAggregate at the end."""
 
-    def __init__(self) -> None:
+    def __init__(self, price_of: PriceOf) -> None:
+        self._price_of = price_of
         self.requests = 0
         self.input_tokens = 0
         self.output_tokens = 0
@@ -117,7 +161,13 @@ class _Acc:
             self.input_by_modality[modality] = self.input_by_modality.get(modality, 0) + tokens
         for modality, tokens in rec.output_modality_tokens.items():
             self.output_by_modality[modality] = self.output_by_modality.get(modality, 0) + tokens
-        self.cost += estimate_cost(rec.provider_model, rec.input_tokens, rec.output_tokens)
+        self.cost += estimate_cost(
+            self._price_of(rec.provider_model),
+            rec.input_modality_tokens,
+            rec.output_modality_tokens,
+            rec.input_tokens,
+            rec.output_tokens,
+        )
 
     def to_aggregate(self) -> UsageAggregate:
         return UsageAggregate(
@@ -131,12 +181,14 @@ class _Acc:
         )
 
 
-def _accumulate(records: list[UsageRecord]) -> tuple[_Acc, dict[str, _Acc]]:
-    totals = _Acc()
+def _accumulate(
+    records: list[UsageRecord], price_of: PriceOf
+) -> tuple[_Acc, dict[str, _Acc]]:
+    totals = _Acc(price_of)
     by_provider: dict[str, _Acc] = {}
     for rec in records:
         totals.add(rec)
-        by_provider.setdefault(rec.provider, _Acc()).add(rec)
+        by_provider.setdefault(rec.provider, _Acc(price_of)).add(rec)
     return totals, by_provider
 
 
@@ -153,9 +205,15 @@ def _bucket_start(ts: datetime, interval: str) -> datetime:
 
 
 def aggregate(
-    records: list[UsageRecord], *, start: datetime, end: datetime, interval: str | None = None
+    records: list[UsageRecord],
+    *,
+    start: datetime,
+    end: datetime,
+    interval: str | None = None,
+    price_of: PriceOf | None = None,
 ) -> UsageStatsResponse:
-    totals, by_provider = _accumulate(records)
+    price_of = price_of or get_pricing
+    totals, by_provider = _accumulate(records, price_of)
 
     buckets: list[UsageBucket] | None = None
     if interval:
@@ -164,7 +222,7 @@ def aggregate(
             grouped.setdefault(_bucket_start(rec.timestamp, interval), []).append(rec)
         buckets = []
         for bucket_start in sorted(grouped):
-            b_totals, b_by_provider = _accumulate(grouped[bucket_start])
+            b_totals, b_by_provider = _accumulate(grouped[bucket_start], price_of)
             buckets.append(
                 UsageBucket(
                     start=bucket_start,
@@ -184,9 +242,14 @@ def aggregate(
 
 
 def summarize(
-    records: list[UsageRecord], *, start: datetime, end: datetime
+    records: list[UsageRecord],
+    *,
+    start: datetime,
+    end: datetime,
+    price_of: PriceOf | None = None,
 ) -> UsageSummaryResponse:
-    totals, by_provider = _accumulate(records)
+    price_of = price_of or get_pricing
+    totals, by_provider = _accumulate(records, price_of)
     return UsageSummaryResponse(
         start=start,
         end=end,
