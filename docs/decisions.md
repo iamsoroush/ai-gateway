@@ -43,24 +43,35 @@ registry edit; the content-based default routes audio to an audio-capable model 
 → `404`. Evolved from "aliases only" per explicit product requests. See
 [architecture.md](architecture.md#request-lifecycle-chat-completions).
 
-### D5. Stores are behind interfaces on `app.state`; usage store is selectable
-**Decision.** `ProviderRouter` and `UsageStore` are constructed in `main.py` and held on
-`app.state`. The usage store is chosen by config: `SQLiteUsageStore` when `USAGE_DB_PATH`
-is set (durable, survives restarts), else `InMemoryUsageStore` (process-local).
+### D5. Stores are behind interfaces on `app.state`; the request store is selectable
+**Decision.** `ProviderRouter` and `RequestStore` are constructed in `main.py` and held on
+`app.state`. The request store is chosen by config: `PostgresRequestStore` when `DATABASE_URL`
+is set (durable, survives restarts), else `InMemoryRequestStore` (process-local). *(The store
+held token-only `UsageRecord`s in the MVP; it now holds per-request `RequestRecord`s — D18.
+The durable backend was SQLite in the MVP and is now Postgres — see below.)*
 **Why.** Keeps a clean seam — tests swap fakes via `app.state`, and the durable store was
-added behind the same `UsageStore` interface with no change to routes/aggregation. SQLite
-needs no external service, which fits the single-instance MVP.
-**Consequences.** Both stores hold only token counts (cost stays query-time, so price edits
-re-price history with no migration — see D10). SQLite is single-file and serialized with a
-lock: fine for one process, not shared across workers/instances — swap for Postgres for that.
-In-memory remains the default when `USAGE_DB_PATH` is unset and still resets on restart.
+added behind the same interface with no change to routes/aggregation.
+**Decision (durable backend).** The durable store is **Postgres** (psycopg3 + a thread-safe
+`ConnectionPool`), replacing the MVP's SQLite. **Why.** SQLite is single-file and
+single-writer — fine for one process, but it doesn't scale or share across workers/instances.
+Postgres does, which is the point of moving to product; it also runs as its own `docker
+compose` service (the app waits on its healthcheck). **Consequences.** Durable runs now need a
+Postgres (compose provides one and injects `DATABASE_URL`); `psycopg` is imported lazily so the
+app and the default (in-memory) test run load without the driver (mirrors the lazy-SDK rule,
+D3). The store's sync `record`/`query` briefly block the event loop per call — fine at the
+low write rate; make them async if write volume grows. SQLite (and the old `USAGE_DB_PATH`) is
+gone; in-memory remains the default when `DATABASE_URL` is unset and still resets on restart.
+Records hold token counts (cost stays query-time — D10) plus the operational metadata of D18.
 
 ### D6. PHI-safe structured logging
 **Decision.** Logs are JSON metadata only (request id, model, provider, latency, errors);
 prompts, media URLs, audio, and generated content are never logged. The 422 handler also
 strips Pydantic's echoed input values.
 **Why.** The target use cases involve medical content; leaking it into logs is unacceptable.
-**Consequences.** This is a hard rule. Don't add content to logs or error bodies.
+**Consequences.** This is a hard rule. Don't add content to logs or error bodies. The
+`requests` table (D18) follows the same rule: it stores operational metadata only —
+including caller IP / user-agent, which are *infrastructure* metadata about the calling
+service, not patient content — never prompts, media, or generated output.
 
 ### D7. Media: URL fetch + `data:` URI decoding in a shared helper
 **Decision.** [../app/utils/media.py](../app/utils/media.py) resolves a media reference to
@@ -185,12 +196,40 @@ disable thinking on models that don't allow it). Sending an effort to a non-reas
 surfaces the provider's error; an unknown value is a `422` (validated by the `Literal`).
 New levels are a one-line change to the contract + the two Gemini maps.
 
+### D18. A `requests` table is the source of truth; usage is computed from it
+**Decision.** Every routed chat request — **success and failure alike** — is persisted as
+one `RequestRecord` row (PHI-safe metadata: status, error type/code/HTTP status, tokens +
+per-modality breakdown, a realized **cost snapshot**, `has_image`/`has_audio` flags,
+latency, model/provider, and caller IP / user-agent). The store (`RequestStore` on
+`app.state.request_store`, in [../app/services/request_store.py](../app/services/request_store.py))
+keeps the `requests` table; `/v1/usage(/summary)` and the new `/v1/requests` listing are
+both computed from it. Recording is best-effort and never breaks the response path; for
+streaming, the record is written once when the stream drains (mid-stream failures are
+captured via the `UsageCollector`). This supersedes the MVP's success-only `UsageRecord`/
+`usage_records` table.
+**Why.** Moving from MVP to product, operators need visibility into failures, latency, and
+who is calling — not just token totals for successful calls. A single per-request table is
+the natural source of truth: usage stats are an aggregation of it, and a per-request view
+(`/v1/requests`) falls out for free.
+**Consequences.** Cost is **doubly available**: a realized `cost_usd` is snapshotted at
+request time (audit, using the cached `PricingService.get`), *and* token counts are kept so
+usage aggregation still recomputes cost at query time — so D10 (price edits re-price history)
+is preserved; the snapshot is informational. Failures carry zero tokens (don't affect
+token/cost totals) but increment a new `failed_requests` count; `requests` counts all
+attempts. Records that fail before model resolution have a null provider and are counted in
+totals only (never bucketed under a `null` provider). Pre-route `422` body-validation errors
+are **not** recorded (they never reach the route, so there is no model/provider context).
+The durable backend is **Postgres** via `DATABASE_URL` (D5); the `requests` table is created
+on first connect. Caller IP / user-agent are operational metadata (see D6); in a medical
+context an IP can be quasi-identifying, so treat the table as PHI-adjacent and never add
+request content to it.
+
 ---
 
 ## Anticipated (not yet built)
 
 Designed-for but intentionally out of scope (see [product.md](product.md#non-goals-for-now)):
-auth/authz, request persistence, quotas/rate limits, retries + provider fallback, prompt
-templates, response caching, PHI-safe audit logging, billing. The seams above (canonical
-layer, provider interface, `app.state` stores, config indirection) exist so these can be
-added without rework.
+auth/authz, quotas/rate limits, retries + provider fallback, prompt templates, response
+caching, billing. The seams above (canonical layer, provider interface, `app.state` stores,
+config indirection) exist so these can be added without rework. *(Per-request persistence —
+the `requests` table — is now built; see D18.)*

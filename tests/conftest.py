@@ -18,8 +18,9 @@ from app.models.canonical import (
     CanonicalUsage,
     StreamEvent,
 )
+from app.models.errors import ProviderRequestError
 from app.providers.base import BaseLLMProvider
-from app.services.usage_store import InMemoryUsageStore
+from app.services.request_store import InMemoryRequestStore
 
 
 class FakeProvider(BaseLLMProvider):
@@ -45,6 +46,22 @@ class FakeProvider(BaseLLMProvider):
         yield StreamEvent(
             usage=CanonicalUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5)
         )
+
+
+class FailingProvider(BaseLLMProvider):
+    """Provider whose upstream call fails — for failure-recording tests."""
+
+    name = "failing"
+
+    def supported_content_types(self, provider_model: str) -> set[str]:
+        return {"text", "image_url", "audio_url", "input_audio"}
+
+    async def complete(self, request: CanonicalLLMRequest) -> CanonicalLLMResponse:
+        raise ProviderRequestError("upstream boom")
+
+    async def stream_complete(self, request: CanonicalLLMRequest) -> AsyncIterator[StreamEvent]:
+        raise ProviderRequestError("upstream boom")
+        yield StreamEvent(delta="")  # pragma: no cover - unreachable, makes this a generator
 
 
 class FakeRouter:
@@ -74,21 +91,35 @@ def fake_client() -> TestClient:
         app.state.provider_router = original
 
 
-@pytest.fixture
-def usage_client():
-    """TestClient with a fresh in-memory usage store and the FakeProvider.
-
-    Yields ``(client, store)`` so tests can pre-populate records or assert what
-    the chat route recorded, in isolation from other tests.
-    """
+def _store_client(provider: BaseLLMProvider):
+    """Context-managed TestClient with a fresh in-memory store and the given provider."""
     orig_router = app.state.provider_router
-    orig_store = app.state.usage_store
-    store = InMemoryUsageStore()
-    app.state.provider_router = FakeRouter(FakeProvider())
-    app.state.usage_store = store
+    orig_store = app.state.request_store
+    store = InMemoryRequestStore()
+    app.state.provider_router = FakeRouter(provider)
+    app.state.request_store = store
     try:
         with TestClient(app) as test_client:
             yield test_client, store
     finally:
         app.state.provider_router = orig_router
-        app.state.usage_store = orig_store
+        app.state.request_store = orig_store
+
+
+@pytest.fixture
+def usage_client():
+    """TestClient with a fresh in-memory request store and the FakeProvider.
+
+    Yields ``(client, store)`` so tests can pre-populate records or assert what
+    the chat route recorded, in isolation from other tests.
+    """
+    yield from _store_client(FakeProvider())
+
+
+@pytest.fixture
+def failing_client():
+    """Like ``usage_client`` but the provider's upstream call fails.
+
+    Yields ``(client, store)`` for exercising failure recording.
+    """
+    yield from _store_client(FailingProvider())

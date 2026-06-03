@@ -12,15 +12,21 @@ import json
 from typing import AsyncIterator
 
 from app.models.canonical import CanonicalLLMRequest
-from app.models.errors import GatewayError
+from app.models.errors import ErrorBody, ErrorResponse, GatewayError
 from app.providers.base import BaseLLMProvider
 
 
 class UsageCollector:
-    """Captures the usage reported on a stream's terminal event (if any)."""
+    """Captures the outcome of a stream for accounting.
+
+    ``usage`` holds the token usage from the stream's terminal event (if any);
+    ``error`` holds an exception raised mid-stream (after the HTTP response has
+    already started), so the request can still be recorded as a failure.
+    """
 
     def __init__(self) -> None:
         self.usage = None
+        self.error: Exception | None = None
 
 
 def _chunk(completion_id: str, model: str, created: int, delta: dict, finish_reason=None) -> str:
@@ -52,5 +58,20 @@ async def sse_stream(
                 collector.usage = event.usage
         yield _chunk(completion_id, model, created, {}, finish_reason="stop")
     except GatewayError as exc:
+        if collector is not None:
+            collector.error = exc
         yield f"data: {json.dumps(exc.to_response().model_dump())}\n\n"
+    except Exception as exc:  # noqa: BLE001 - never leak a mid-stream error to the client
+        # The response is already 200; surface a content-free error event and record
+        # the failure (so "record every request" holds even for unexpected errors).
+        if collector is not None:
+            collector.error = exc
+        body = ErrorResponse(
+            error=ErrorBody(
+                message="The upstream provider stream failed.",
+                type="provider_error",
+                code="provider_request_failed",
+            )
+        )
+        yield f"data: {json.dumps(body.model_dump())}\n\n"
     yield "data: [DONE]\n\n"

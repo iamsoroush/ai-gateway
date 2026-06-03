@@ -23,10 +23,10 @@ class Settings(BaseSettings):
     # audio-capable default; otherwise the general default.
     default_model: str = "gpt-5.4-nano"
     default_audio_model: str = "gemini-2.5-flash"
-    # Where to persist usage records. Set to a file path (e.g. "data/usage.db") for
-    # a durable SQLite store that survives restarts; leave unset for the in-memory
-    # store (process-local, resets on restart).
-    usage_db_path: str | None = None
+    # Postgres DSN for the durable `requests` store (e.g.
+    # "postgresql://user:pass@host:5432/db"). Set → records persist to Postgres;
+    # unset → process-local in-memory store (resets on restart).
+    database_url: str | None = None
     # Optional hosted JSON of model prices (see app/services/pricing.py). When set,
     # it overrides the static PRICING table below and is refreshed on this interval.
     # When unset, only the static table is used.

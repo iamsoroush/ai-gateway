@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from app.main import app
-from app.models.usage import UsageRecord
+from app.models.usage import RequestRecord
 from app.services.pricing import PricingService, parse_pricing
 from app.services.usage import estimate_cost
 
@@ -114,7 +114,7 @@ def test_usage_endpoint_uses_remote_pricing(usage_client):
     )
     try:
         store.record(
-            UsageRecord(
+            RequestRecord(
                 timestamp=datetime.now(timezone.utc),
                 provider="gemini",
                 provider_model="gemini-2.5-flash",

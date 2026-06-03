@@ -2,17 +2,16 @@
 
 from datetime import datetime, timedelta, timezone
 
-from app.models.usage import UsageRecord
+from app.models.usage import RequestRecord
 from app.services.usage import aggregate, summarize
-from app.services.usage_store import SQLiteUsageStore
 
 BASE = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
 
 
-def _records() -> list[UsageRecord]:
+def _records() -> list[RequestRecord]:
     return [
         # Gemini: 1M input (mixed text/image) + 1M output text.
-        UsageRecord(
+        RequestRecord(
             timestamp=BASE,
             provider="gemini",
             provider_model="gemini-2.5-flash",
@@ -24,7 +23,7 @@ def _records() -> list[UsageRecord]:
             output_modality_tokens={"text": 1_000_000},
         ),
         # OpenAI: 1M input text + 1M output text, on the next day.
-        UsageRecord(
+        RequestRecord(
             timestamp=BASE + timedelta(days=1),
             provider="openai",
             provider_model="gpt-5.4-nano",
@@ -80,6 +79,10 @@ def test_summarize_overall_and_cost_by_provider():
     start, end = BASE - timedelta(days=1), BASE + timedelta(days=2)
     summary = summarize(_records(), start=start, end=end)
     assert summary.requests == 2
+    assert summary.failed_requests == 0
+    # These records carry no latency, so the latency stats are absent (not zero).
+    assert summary.latency_ms_avg is None
+    assert summary.latency_ms_p50 is None
     assert summary.total_tokens == 4_000_000
     assert summary.estimated_cost_usd == 4.25
     assert summary.cost_by_provider == {"gemini": 2.80, "openai": 1.45}
@@ -118,6 +121,10 @@ def test_chat_completion_is_recorded(usage_client):
 
     summary = client.get("/v1/usage/summary").json()
     assert summary["requests"] == 1
+    assert summary["failed_requests"] == 0
+    # The route records latency, so the summary surfaces it.
+    assert summary["latency_ms_avg"] is not None
+    assert summary["latency_ms_p50"] is not None
     assert summary["input_tokens"] == 3
     assert summary["output_tokens"] == 2
     assert summary["total_tokens"] == 5
@@ -151,7 +158,7 @@ def test_usage_endpoint_modality_and_provider_filter(usage_client):
     client, store = usage_client
     now = datetime.now(timezone.utc)
     store.record(
-        UsageRecord(
+        RequestRecord(
             timestamp=now,
             provider="gemini",
             provider_model="gemini-2.5-flash",
@@ -164,7 +171,7 @@ def test_usage_endpoint_modality_and_provider_filter(usage_client):
         )
     )
     store.record(
-        UsageRecord(
+        RequestRecord(
             timestamp=now,
             provider="openai",
             provider_model="gpt-5.4-nano",
@@ -191,62 +198,3 @@ def test_usage_endpoint_rejects_bad_interval(usage_client):
     client, _store = usage_client
     resp = client.get("/v1/usage", params={"interval": "hour"})
     assert resp.status_code == 422
-
-
-# --------------------------------------------------------------------------- #
-# Durable (SQLite) store                                                      #
-# --------------------------------------------------------------------------- #
-
-
-def _sample_record(provider: str = "gemini", at: datetime = BASE) -> UsageRecord:
-    return UsageRecord(
-        timestamp=at,
-        provider=provider,
-        provider_model="gemini-2.5-flash",
-        model_alias="report-fast",
-        stream=True,
-        input_tokens=100,
-        output_tokens=50,
-        total_tokens=150,
-        input_modality_tokens={"text": 60, "audio": 40},
-        output_modality_tokens={"text": 50},
-    )
-
-
-def test_sqlite_store_persists_across_restart(tmp_path):
-    path = str(tmp_path / "usage.db")
-    # First "process": record two requests, then drop the store.
-    store = SQLiteUsageStore(path)
-    store.record(_sample_record("gemini"))
-    store.record(_sample_record("openai", at=BASE + timedelta(hours=1)))
-    del store
-
-    # Second "process": a fresh store over the same file still sees the records,
-    # fully reconstructed (modality maps, stream flag, timestamps).
-    reopened = SQLiteUsageStore(path)
-    rows = reopened.query(BASE - timedelta(days=1), BASE + timedelta(days=1))
-    assert len(rows) == 2
-    first = rows[0]
-    assert first.provider == "gemini"
-    assert first.stream is True
-    assert first.input_modality_tokens == {"text": 60, "audio": 40}
-    assert first.timestamp == BASE
-
-    # Cost is still computed at query time from the stored tokens.
-    summary = summarize(rows, start=BASE - timedelta(days=1), end=BASE + timedelta(days=1))
-    assert summary.requests == 2
-    assert summary.estimated_cost_usd > 0
-
-
-def test_sqlite_store_filters_by_window_and_provider(tmp_path):
-    store = SQLiteUsageStore(str(tmp_path / "usage.db"))
-    store.record(_sample_record("gemini", at=BASE))
-    store.record(_sample_record("openai", at=BASE + timedelta(days=2)))
-
-    # Window excludes the second record.
-    in_window = store.query(BASE - timedelta(hours=1), BASE + timedelta(hours=1))
-    assert [r.provider for r in in_window] == ["gemini"]
-
-    # Provider filter is applied in SQL.
-    only_openai = store.query(BASE - timedelta(days=1), BASE + timedelta(days=5), provider="openai")
-    assert [r.provider for r in only_openai] == ["openai"]

@@ -36,20 +36,20 @@ OpenAI-compatible response / SSE stream to caller
 
 | Module | Responsibility |
 | ------ | -------------- |
-| [../app/main.py](../app/main.py) | Build the FastAPI app, configure logging, wire `app.state.provider_router` and `app.state.usage_store`, register exception handlers. |
-| [../app/api/routes.py](../app/api/routes.py) | HTTP endpoints only. Orchestrates normalize → route → validate → delegate → record. **Contains no OpenAI/Gemini specifics.** |
+| [../app/main.py](../app/main.py) | Build the FastAPI app, configure logging, wire `app.state.provider_router` and `app.state.request_store`, register exception handlers. |
+| [../app/api/routes.py](../app/api/routes.py) | HTTP endpoints only. Orchestrates normalize → route → validate → delegate → record (every request, success or failure). **Contains no OpenAI/Gemini specifics.** |
 | [../app/config.py](../app/config.py) | `Settings` (env/.env), `MODEL_REGISTRY`, provider-name inference, `resolve_model`, `PRICING`. The only place tunables live. |
 | [../app/models/openai_contract.py](../app/models/openai_contract.py) | Public request/response schemas (the contract). |
 | [../app/models/canonical.py](../app/models/canonical.py) | Internal `CanonicalLLMRequest`/`Response`, `CanonicalUsage`, `StreamEvent`. The lingua franca. |
 | [../app/models/errors.py](../app/models/errors.py) | `GatewayError` hierarchy + the JSON error envelope. |
-| [../app/models/usage.py](../app/models/usage.py) | `UsageRecord` + usage-stats response models. |
+| [../app/models/usage.py](../app/models/usage.py) | `RequestRecord` (one row per request) + usage-stats / request-listing response models. |
 | [../app/providers/base.py](../app/providers/base.py) | `BaseLLMProvider` interface: `supported_content_types`, `ensure_ready`, `complete`, `stream_complete`. |
 | [../app/providers/openai_provider.py](../app/providers/openai_provider.py) / [gemini_provider.py](../app/providers/gemini_provider.py) | Adapters: canonical ⇄ provider SDK. Lazy SDK imports. |
 | [../app/services/normalizer.py](../app/services/normalizer.py) | OpenAI request → canonical; model selection; content-capability validation. |
 | [../app/services/router.py](../app/services/router.py) | Provider name → adapter instance. |
 | [../app/services/streaming.py](../app/services/streaming.py) | OpenAI-style SSE formatting; `UsageCollector` for streaming usage. |
-| [../app/services/usage.py](../app/services/usage.py) | Build/record usage, aggregate by provider/modality/time, modality-aware cost. |
-| [../app/services/usage_store.py](../app/services/usage_store.py) | `UsageStore` interface + `InMemoryUsageStore` and durable `SQLiteUsageStore`. |
+| [../app/services/usage.py](../app/services/usage.py) | Build request records, aggregate by provider/modality/time (+ failures/latency), modality-aware cost. |
+| [../app/services/request_store.py](../app/services/request_store.py) | `RequestStore` interface + `InMemoryRequestStore` and durable `PostgresRequestStore` (the `requests` table). |
 | [../app/services/pricing.py](../app/services/pricing.py) | `PricingService`: hosted-JSON prices, TTL cache, static fallback. |
 | [../app/utils/](../app/utils/) | `logging` (JSON, PHI-safe), `ids`, `media` (fetch URL / decode `data:` URI). |
 
@@ -69,7 +69,12 @@ OpenAI-compatible response / SSE stream to caller
 5. **Delegate**:
    - Non-streaming: `await provider.complete(canonical)` → `CanonicalLLMResponse`; route maps it to the OpenAI response.
    - Streaming: `provider.ensure_ready()` first (so a missing key is a normal HTTP error, not a mid-stream event), then stream via `sse_stream`.
-6. **Record usage** — best-effort, wrapped so it can never break the response.
+6. **Record the request** — best-effort, wrapped so it can never break the response. The
+   whole pipeline (steps 2–5) runs inside a try/except so **every routed request is
+   persisted** — successes *and* failures (unknown model, unsupported content, missing key,
+   provider error). Streaming records once when the stream drains (mid-stream failures are
+   captured via the `UsageCollector`). Pre-route `422` body-validation errors are out of
+   scope (they never reach the route). See [Requests & usage subsystem](#requests--usage-subsystem).
 
 ## Provider adapters
 
@@ -89,21 +94,32 @@ Each adapter translates **canonical ⇄ provider** and isolates all SDK specific
 `usage`). `sse_stream` formats each delta as an OpenAI `chat.completion.chunk`,
 terminates with `data: [DONE]`, and deposits the terminal usage into a `UsageCollector`
 so streaming requests are accounted for. Errors mid-stream are emitted as a final SSE
-error event (the HTTP status is already 200 by then).
+error event (the HTTP status is already 200 by then) and deposited on the `UsageCollector`
+so the request is still recorded as a failure when the stream drains.
 
-## Usage subsystem
+## Requests & usage subsystem
 
-- Every successful completion → `UsageRecord` (timestamp, provider, model, tokens,
-  per-modality breakdown) stored in `app.state.usage_store`.
-- `/v1/usage` and `/v1/usage/summary` query the store over a time window and aggregate
-  by provider + modality (+ optional time buckets), estimating cost via `app.state.pricing`.
-- **Cost is computed at query time** (not stored) and is **modality-aware** — each
-  modality bucket is priced at its own rate (rates may be flat or per-modality). Prices come
-  from `PricingService` ([../app/services/pricing.py](../app/services/pricing.py)): the
-  static `config.PRICING` table by default, or a hosted JSON (`PRICING_SOURCE_URL`) that
-  overrides it, TTL-cached with fallback to last-known/static on failure.
-- Store is selectable: **SQLite** (`SQLiteUsageStore`) when `USAGE_DB_PATH` is set, so usage
-  survives restarts; otherwise **in-memory** (resets on restart). Both single-process — see below.
+- Every routed request → one `RequestRecord` (timestamp, request id, **status** +
+  error type/code/HTTP status, provider/model, tokens + per-modality breakdown, realized
+  **cost snapshot**, `has_image`/`has_audio` flags, **latency**, caller **IP / user-agent**)
+  stored in `app.state.request_store`. **Both successes and failures** are recorded; failures
+  carry zero tokens. Stored as PHI-safe metadata only — never prompts, media, or content (D6).
+- `/v1/usage` and `/v1/usage/summary` query the store over a window and aggregate by
+  provider + modality (+ optional time buckets), plus `failed_requests` and latency
+  (avg / p50), estimating cost via `app.state.pricing`. `/v1/requests` lists individual
+  records (newest first), filterable by provider / model / status, with a bounded `limit`.
+- **Cost is two things**: a realized `cost_usd` is **snapshotted per record** at request time
+  (audit), but aggregate cost is still **recomputed at query time** from token counts (so a
+  price edit re-prices history — D10) and is **modality-aware** — each modality bucket is
+  priced at its own rate (flat or per-modality). Prices come from `PricingService`
+  ([../app/services/pricing.py](../app/services/pricing.py)): the static `config.PRICING`
+  table by default, or a hosted JSON (`PRICING_SOURCE_URL`) that overrides it, TTL-cached
+  with fallback to last-known/static on failure.
+- Store is selectable: **Postgres** (`PostgresRequestStore`, the `requests` table) when
+  `DATABASE_URL` is set, so history survives restarts and is shareable across workers/instances;
+  otherwise **in-memory** (resets on restart). Postgres runs as its own `docker compose` service
+  and the app waits on its healthcheck. `psycopg` is imported lazily, so the app and the default
+  in-memory test run load without the driver (D3, D5).
 
 ## Error handling
 
@@ -131,13 +147,14 @@ by a DB/config service without touching callers.
   (keep SDK imports lazy), register it in `ProviderRouter`, add its API key to `Settings`
   + `.env.example`, and optionally add name prefixes to `PROVIDER_NAME_PREFIXES`. No route change.
 - **Add a model alias**: add an entry to `MODEL_REGISTRY` (and a `PRICING` row). Available immediately.
-- **Make usage durable**: set `USAGE_DB_PATH` to use the built-in `SQLiteUsageStore` (survives
-  restarts). For multi-instance/shared history, implement `UsageStore` over Postgres behind the
-  same interface and select it in `main.py`. Nothing else changes.
+- **Persistence**: set `DATABASE_URL` to use the built-in `PostgresRequestStore` (durable,
+  shareable across workers/instances). `docker compose` provides the Postgres service. For a
+  different backend, implement `RequestStore` behind the same interface and select it in
+  `main.py`. Nothing else changes.
 - **Change prices**: edit `config.PRICING` (static), or set `PRICING_SOURCE_URL` to a hosted
   JSON that overrides it (rates may be flat or per-modality). No code change for rate updates.
-- **Future**: auth middleware, request persistence, quotas, retries/fallback, prompt
-  templates — all anticipated; see [decisions.md](decisions.md).
+- **Future**: auth middleware, quotas, retries/fallback, prompt templates — all anticipated;
+  see [decisions.md](decisions.md). (Per-request persistence is now built — D18.)
 
 ## Testing strategy
 

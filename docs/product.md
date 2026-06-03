@@ -37,8 +37,12 @@ boundary). It is **not** a public, user-facing API. There is no authentication y
   gateway pick one based on content.
 - **Multimodal input**: text, image (URL or data URI), audio (URL or base64).
 - **Streaming and non-streaming** output (OpenAI-style SSE).
-- **Usage & cost stats**: tokens by provider and modality over time, with estimated cost.
-- **PHI-safe logging**: operational metadata only; never prompts/media/content.
+- **Per-request records**: one row per request (success *and* failure) with status, tokens,
+  realized cost, audio/image flags, model, latency, and caller IP/UA — queryable via
+  `/v1/requests`. Metadata only; never prompts/media/content.
+- **Usage & cost stats**: computed from those records — tokens by provider and modality over
+  time, with estimated cost, failure counts, and latency.
+- **PHI-safe logging & storage**: operational metadata only; never prompts/media/content.
 
 The product is aimed at internal use cases like medical report generation, hence the
 default aliases (`report-*`) and the strict no-content-logging stance.
@@ -56,7 +60,6 @@ These are deliberately **out of scope for the MVP** but the code is structured s
 they can be added without rework (see [decisions.md](decisions.md)):
 
 - Authentication / authorization / multi-tenant isolation.
-- Durable persistence of requests or usage (usage is in-memory today).
 - Quotas / rate limiting, retries, provider fallback/load-balancing.
 - Prompt templates, caching, PHI-safe audit logging, billing integration.
 
@@ -66,5 +69,6 @@ A caller can, through one OpenAI-compatible contract:
 1. send text/image/audio, streaming or not, against an internal alias;
 2. have it routed to the correct provider with provider details hidden;
 3. get a clean OpenAI-shaped response (typed via the `openai` SDK if desired);
-4. and have the gateway operators see token usage and estimated cost per provider
-   over time — all without any service knowing provider keys or formats.
+4. and have the gateway operators see per-request records and token usage, estimated
+   cost, failures, and latency per provider over time — all without any service knowing
+   provider keys or formats.

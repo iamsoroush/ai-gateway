@@ -17,8 +17,9 @@ The public surface mirrors the **OpenAI Chat Completions** API, so the official
 | GET    | `/health`              | Liveness. |
 | GET    | `/v1/models`           | List registered model aliases + their providers. |
 | POST   | `/v1/chat/completions` | Chat completion (streaming or not, multimodal). |
-| GET    | `/v1/usage`            | Token usage by provider + modality over a window, with cost. |
-| GET    | `/v1/usage/summary`    | Overall usage totals + estimated cost. |
+| GET    | `/v1/usage`            | Token usage by provider + modality over a window, with cost, failures + latency. |
+| GET    | `/v1/usage/summary`    | Overall usage totals + estimated cost + failures + latency. |
+| GET    | `/v1/requests`         | List individual request records (newest first), filterable. |
 
 No authentication (MVP).
 
@@ -141,34 +142,72 @@ Query params (all optional): `start`, `end` (ISO 8601; default last 30 days),
 {
   "start": "...", "end": "...", "interval": null,
   "totals": {
-    "requests": 2, "input_tokens": 2000000, "output_tokens": 2000000, "total_tokens": 4000000,
+    "requests": 2, "failed_requests": 0,
+    "input_tokens": 2000000, "output_tokens": 2000000, "total_tokens": 4000000,
     "input_by_modality": {"text": 1800000, "image": 200000},
     "output_by_modality": {"text": 2000000},
-    "estimated_cost_usd": 4.25
+    "estimated_cost_usd": 4.25,
+    "latency_ms_avg": 812.5, "latency_ms_p50": 740.0
   },
   "by_provider": { "gemini": { /* same shape */ }, "openai": { /* ... */ } },
   "buckets": null
 }
 ```
 With `interval`, `buckets` is a time-series of `{start, totals, by_provider}`.
+`requests` counts all attempts; `failed_requests` is the errored subset (tokens/cost come
+from successes only). Latency stats are over records that report a latency (`null` if none).
 
 ## `GET /v1/usage/summary`
 Params: `start`, `end`, `provider`.
 ```json
 {
   "start": "...", "end": "...",
-  "requests": 2, "input_tokens": 2000000, "output_tokens": 2000000, "total_tokens": 4000000,
+  "requests": 2, "failed_requests": 0,
+  "input_tokens": 2000000, "output_tokens": 2000000, "total_tokens": 4000000,
   "estimated_cost_usd": 4.25,
   "input_cost_usd": 0.5,
   "output_cost_usd": 3.75,
   "cost_by_provider": {"gemini": 2.8, "openai": 1.45},
   "input_cost_by_provider": {"gemini": 0.3, "openai": 0.2},
-  "output_cost_by_provider": {"gemini": 2.5, "openai": 1.25}
+  "output_cost_by_provider": {"gemini": 2.5, "openai": 1.25},
+  "latency_ms_avg": 812.5, "latency_ms_p50": 740.0
 }
 ```
 Cost is split by token direction: `input_cost_usd` / `output_cost_usd` are the
 overall figures, and `*_cost_by_provider` break the same numbers down per provider.
-By construction `estimated_cost_usd == input_cost_usd + output_cost_usd`.
+By construction `estimated_cost_usd == input_cost_usd + output_cost_usd`. `failed_requests`
+is the errored subset of `requests`; latency stats are over records that report one.
+
+## `GET /v1/requests`
+
+Lists individual request records (newest first) as PHI-safe operational metadata —
+**never** prompts, media, or generated content. Query params (all optional): `start`,
+`end` (ISO 8601; default last 30 days), `provider`, `model` (matches a model alias *or*
+provider model), `status` ∈ `success` | `error`, `limit` (1–1000, default 100).
+
+```json
+{
+  "start": "...", "end": "...", "count": 1,
+  "data": [
+    {
+      "timestamp": "...", "request_id": "req-123", "status": "success",
+      "provider": "gemini", "provider_model": "gemini-2.5-flash", "model_alias": "report-fast",
+      "stream": false,
+      "error_type": null, "error_code": null, "http_status": null,
+      "latency_ms": 740.0,
+      "input_tokens": 3, "output_tokens": 2, "total_tokens": 5,
+      "input_modality_tokens": {"text": 3}, "output_modality_tokens": {"text": 2},
+      "has_image": false, "has_audio": false,
+      "cost_usd": 0.0000059,
+      "client_ip": "10.0.0.7", "user_agent": "my-service/1.2"
+    }
+  ]
+}
+```
+On a **failure** row, `status` is `error`, `error_type`/`error_code`/`http_status` mirror the
+error envelope, token counts are `0`, and `provider`/`provider_model` may be `null` (when the
+request failed before the model was resolved — `model_alias` then holds the requested name).
+`cost_usd` is the realized cost snapshotted at request time (`null` when unpriced / on failure).
 
 ## Errors
 

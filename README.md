@@ -50,8 +50,12 @@ The FastAPI route never contains provider-specific logic — it depends only on 
   (3+) or `thinking_budget` (2.5)
 - Flexible model selection: registered **aliases**, **any raw model name**
   (provider auto-detected), or **omit `model`** to auto-pick by content
-- Usage stats: token usage by provider and modality (text/image/audio) over a
-  time window, with **estimated cost**
+- **Per-request records**: one row per request — success *and* failure — with status,
+  tokens, realized cost, audio/image flags, model, latency, and caller IP/UA (metadata
+  only), queryable via `/v1/requests`
+- Usage stats (computed from those records): token usage by provider and modality
+  (text/image/audio) over a time window, with **estimated cost**, **failure counts**,
+  and **latency**
 - Consistent JSON error envelope
 - Structured (JSON) logging that never logs prompts, media, or generated content
 - No authentication (MVP) — keys are loaded from `.env`
@@ -67,7 +71,7 @@ app/
     openai_contract.py    # public OpenAI-shaped request/response
     canonical.py          # internal canonical request/response/stream
     errors.py             # error types + JSON envelope
-    usage.py              # usage record + stats response models
+    usage.py              # RequestRecord + usage/request-listing response models
   providers/
     base.py               # BaseLLMProvider interface
     openai_provider.py    # OpenAI adapter
@@ -76,8 +80,8 @@ app/
     normalizer.py         # OpenAI request -> canonical + capability checks
     router.py             # provider name -> adapter
     streaming.py          # SSE formatting
-    usage.py              # usage recording, aggregation, modality-aware cost
-    usage_store.py        # UsageStore interface + in-memory and SQLite stores
+    usage.py              # request-record building, aggregation, modality-aware cost
+    request_store.py      # RequestStore interface + in-memory and Postgres stores (requests table)
     pricing.py            # PricingService: hosted-JSON prices, TTL cache, fallback
   utils/                  # logging, ids, media fetch
 examples/openai_sdk_client.py  # runnable examples using the official OpenAI SDK
@@ -104,6 +108,11 @@ tests/                    # health, models, normalizer, chat, providers, sdk-com
    if 8081 is taken). The source is bind-mounted and uvicorn runs with
    `--reload`, so code changes hot-reload.
 
+   Compose also starts a **Postgres** service (the durable request store) and
+   injects `DATABASE_URL` into the app; the app waits on Postgres's healthcheck
+   before starting. Data lives in the `pgdata` named volume (survives restarts;
+   remove it with `docker compose down -v`).
+
 3. Check it's up:
 
    ```bash
@@ -115,6 +124,8 @@ tests/                    # health, models, normalizer, chat, providers, sdk-com
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install .
+# Optional: point at a Postgres for durable request history (else in-memory).
+# export DATABASE_URL=postgresql://user:pass@localhost:5432/db
 uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 ```
 
@@ -127,7 +138,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 | `LOG_LEVEL`           | Log level (`DEBUG`/`INFO`/`WARNING`/...)                 | `INFO`             |
 | `DEFAULT_MODEL`       | Model used when `model` is omitted and there is no audio | `gpt-5.4-nano`     |
 | `DEFAULT_AUDIO_MODEL` | Model used when `model` is omitted and audio is present  | `gemini-2.5-flash` |
-| `USAGE_DB_PATH`       | SQLite file for durable usage; unset → in-memory (resets on restart) | `data/usage.db` |
+| `DATABASE_URL`        | Postgres DSN for the durable `requests` table; unset → in-memory (resets on restart). `docker compose` sets this automatically. | _(empty)_ |
 | `PRICING_SOURCE_URL`  | Optional hosted JSON of model prices (else the static table) | _(empty)_      |
 | `PRICING_REFRESH_SECONDS` | How often to refresh prices from `PRICING_SOURCE_URL` | `3600`         |
 
@@ -140,8 +151,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 | GET    | `/health`              | Liveness check                                |
 | GET    | `/v1/models`           | List internal model aliases + providers       |
 | POST   | `/v1/chat/completions` | OpenAI-compatible chat completion             |
-| GET    | `/v1/usage`            | Token usage by provider + modality, with cost |
-| GET    | `/v1/usage/summary`    | Overall usage totals + estimated cost         |
+| GET    | `/v1/usage`            | Token usage by provider + modality, with cost, failures + latency |
+| GET    | `/v1/usage/summary`    | Overall usage totals + estimated cost + failures + latency |
+| GET    | `/v1/requests`         | List individual request records (newest first), filterable |
 
 ### `GET /health`
 
@@ -596,9 +608,12 @@ data: [DONE]
 
 ## Usage & cost
 
-Every successful chat completion (streaming and non-streaming) is recorded with
-its provider, model, token counts, and a best-effort per-modality breakdown. Two
-endpoints expose aggregated stats over a time window (default **last 30 days**).
+Every routed chat request — **success and failure alike** — is recorded as one row in
+the `requests` table: status, provider/model, token counts + per-modality breakdown, a
+realized **cost snapshot**, audio/image flags, **latency**, and caller IP/user-agent. It
+is **metadata only** — never prompts, media, or generated content. Usage stats are
+computed from these rows. Three endpoints query a time window (default **last 30 days**):
+`/v1/usage`, `/v1/usage/summary`, and `/v1/requests` (per-request listing).
 
 ### `GET /v1/usage`
 
@@ -629,12 +644,15 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
   "interval": null,
   "totals": {
     "requests": 2,
+    "failed_requests": 0,
     "input_tokens": 2000000,
     "output_tokens": 2000000,
     "total_tokens": 4000000,
     "input_by_modality": { "text": 1800000, "image": 200000 },
     "output_by_modality": { "text": 2000000 },
-    "estimated_cost_usd": 4.25
+    "estimated_cost_usd": 4.25,
+    "latency_ms_avg": 812.5,
+    "latency_ms_p50": 740.0
   },
   "by_provider": {
     "gemini": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 2.80, "...": "..." },
@@ -662,6 +680,7 @@ curl "http://localhost:8081/v1/usage/summary"
   "start": "2026-05-03T00:00:00Z",
   "end": "2026-06-02T00:00:00Z",
   "requests": 2,
+  "failed_requests": 0,
   "input_tokens": 2000000,
   "output_tokens": 2000000,
   "total_tokens": 4000000,
@@ -670,13 +689,54 @@ curl "http://localhost:8081/v1/usage/summary"
   "output_cost_usd": 3.75,
   "cost_by_provider": { "gemini": 2.8, "openai": 1.45 },
   "input_cost_by_provider": { "gemini": 0.3, "openai": 0.2 },
-  "output_cost_by_provider": { "gemini": 2.5, "openai": 1.25 }
+  "output_cost_by_provider": { "gemini": 2.5, "openai": 1.25 },
+  "latency_ms_avg": 812.5,
+  "latency_ms_p50": 740.0
 }
 ```
 
 `estimated_cost_usd == input_cost_usd + output_cost_usd`; `cost_by_provider` is the
 per-provider total, broken out by direction in `input_cost_by_provider` /
-`output_cost_by_provider`.
+`output_cost_by_provider`. `requests` counts all attempts and `failed_requests` the
+errored subset (tokens/cost come from successes only); latency stats are over records
+that report a latency (`null` if none).
+
+### `GET /v1/requests`
+
+Lists individual request records (newest first) — PHI-safe metadata only. Accepts
+`start`, `end`, `provider`, `model` (matches a model alias *or* provider model),
+`status` (`success`/`error`), and `limit` (1–1000, default 100).
+
+```bash
+# the 20 most recent failures
+curl "http://localhost:8081/v1/requests?status=error&limit=20"
+
+# everything that hit report-fast in a window
+curl "http://localhost:8081/v1/requests?model=report-fast&start=2026-05-01T00:00:00Z"
+```
+
+```json
+{
+  "start": "2026-05-03T00:00:00Z",
+  "end": "2026-06-02T00:00:00Z",
+  "count": 1,
+  "data": [
+    {
+      "timestamp": "2026-06-02T09:14:55Z", "request_id": "req-123", "status": "success",
+      "provider": "gemini", "provider_model": "gemini-2.5-flash", "model_alias": "report-fast",
+      "stream": false, "error_type": null, "error_code": null, "http_status": null,
+      "latency_ms": 740.0, "input_tokens": 3, "output_tokens": 2, "total_tokens": 5,
+      "input_modality_tokens": { "text": 3 }, "output_modality_tokens": { "text": 2 },
+      "has_image": false, "has_audio": false, "cost_usd": 0.0000059,
+      "client_ip": "10.0.0.7", "user_agent": "my-service/1.2"
+    }
+  ]
+}
+```
+
+On a **failure** row, `status` is `error`, the `error_*`/`http_status` fields mirror the
+error envelope, tokens are `0`, and `provider`/`provider_model` may be `null` (request
+failed before model resolution — `model_alias` then holds the requested name).
 
 ### Pricing
 
@@ -763,10 +823,14 @@ include user prompts, image/audio URLs, audio data, or generated content.
   models, e.g. a `*-audio-preview` model.)
 - Provider auto-detection covers OpenAI and Gemini name prefixes; a model name
   with an unrecognized prefix returns `404`.
-- **Usage stats persist to SQLite when `USAGE_DB_PATH` is set** (`SQLiteUsageStore`,
-  the default in `.env.example`) — records survive restarts. Unset it to use the
-  in-memory store, which resets on restart. Neither is shared across instances; swap
-  in a Postgres implementation of `UsageStore` for multi-instance history.
+- **The `requests` table persists to Postgres when `DATABASE_URL` is set**
+  (`PostgresRequestStore`) — records survive restarts and can be shared across
+  workers/instances. `docker compose up` runs a Postgres service and injects
+  `DATABASE_URL` for you. Unset it (e.g. a non-Docker run with no DSN) to use the
+  in-memory store, which resets on restart. The `psycopg` driver is imported lazily, so
+  the in-memory path needs neither the driver nor a database.
+- **Pre-route `422` body-validation errors are not recorded** (they never reach the route,
+  so there is no model/provider context to record).
 - Pricing rates are provider list prices verified June 2026; update `PRICING` (or a
   hosted `PRICING_SOURCE_URL`) as they change.
 - Streaming token usage depends on the provider returning a final usage event
@@ -819,5 +883,6 @@ pytest
 Covered: `/health`, `/v1/models`, request normalization (string and multimodal),
 raw model-name routing, content-based default model selection, unknown model,
 unsupported provider, unsupported content type, the data-URI media helper,
-OpenAI-SDK response compatibility, usage recording + aggregation + cost + the
-`/v1/usage` endpoints, and both streaming and non-streaming chat completions.
+OpenAI-SDK response compatibility, request recording (success *and* failure) +
+aggregation + cost + the `/v1/usage` and `/v1/requests` endpoints, and both streaming
+and non-streaming chat completions.

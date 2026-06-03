@@ -7,6 +7,35 @@ services:
       - "8081:8080"
     env_file:
       - .env
+    environment:
+      # Durable request store. Points at the `db` service below; overrides any
+      # DATABASE_URL in .env (compose `environment` wins over `env_file`).
+      DATABASE_URL: postgresql://ai_gateway:ai_gateway@db:5432/ai_gateway
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       - .:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+
+  db:
+    image: postgres:16
+    container_name: ai-gateway-db
+    environment:
+      POSTGRES_USER: ai_gateway
+      POSTGRES_PASSWORD: ai_gateway
+      POSTGRES_DB: ai_gateway
+    # Not published to the host by default; the app reaches it over the compose
+    # network. Uncomment to inspect with a local client (psql, etc.).
+    # ports:
+    #   - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_gateway -d ai_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
