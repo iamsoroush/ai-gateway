@@ -74,7 +74,7 @@ app/
     router.py             # provider name -> adapter
     streaming.py          # SSE formatting
     usage.py              # usage recording, aggregation, modality-aware cost
-    usage_store.py        # UsageStore interface + in-memory store
+    usage_store.py        # UsageStore interface + in-memory and SQLite stores
     pricing.py            # PricingService: hosted-JSON prices, TTL cache, fallback
   utils/                  # logging, ids, media fetch
 examples/openai_sdk_client.py  # runnable examples using the official OpenAI SDK
@@ -124,6 +124,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 | `LOG_LEVEL`           | Log level (`DEBUG`/`INFO`/`WARNING`/...)                 | `INFO`             |
 | `DEFAULT_MODEL`       | Model used when `model` is omitted and there is no audio | `gpt-5.4-nano`     |
 | `DEFAULT_AUDIO_MODEL` | Model used when `model` is omitted and audio is present  | `gemini-2.5-flash` |
+| `USAGE_DB_PATH`       | SQLite file for durable usage; unset → in-memory (resets on restart) | `data/usage.db` |
 | `PRICING_SOURCE_URL`  | Optional hosted JSON of model prices (else the static table) | _(empty)_      |
 | `PRICING_REFRESH_SECONDS` | How often to refresh prices from `PRICING_SOURCE_URL` | `3600`         |
 
@@ -608,11 +609,11 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
     "total_tokens": 4000000,
     "input_by_modality": { "text": 1800000, "image": 200000 },
     "output_by_modality": { "text": 2000000 },
-    "estimated_cost_usd": 0.825
+    "estimated_cost_usd": 4.25
   },
   "by_provider": {
-    "gemini": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 0.375, "...": "..." },
-    "openai": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 0.45,  "...": "..." }
+    "gemini": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 2.80, "...": "..." },
+    "openai": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 1.45, "...": "..." }
   },
   "buckets": null
 }
@@ -623,8 +624,9 @@ the same `totals` + `by_provider` shape.
 
 ### `GET /v1/usage/summary`
 
-Overall totals and estimated cost (plus a per-provider cost map). Accepts
-`start`, `end`, `provider`.
+Overall totals and estimated cost, with the cost split into input- and
+output-token spend — both overall and per provider. Accepts `start`, `end`,
+`provider`.
 
 ```bash
 curl "http://localhost:8081/v1/usage/summary"
@@ -638,10 +640,18 @@ curl "http://localhost:8081/v1/usage/summary"
   "input_tokens": 2000000,
   "output_tokens": 2000000,
   "total_tokens": 4000000,
-  "estimated_cost_usd": 0.825,
-  "cost_by_provider": { "gemini": 0.375, "openai": 0.45 }
+  "estimated_cost_usd": 4.25,
+  "input_cost_usd": 0.5,
+  "output_cost_usd": 3.75,
+  "cost_by_provider": { "gemini": 2.8, "openai": 1.45 },
+  "input_cost_by_provider": { "gemini": 0.3, "openai": 0.2 },
+  "output_cost_by_provider": { "gemini": 2.5, "openai": 1.25 }
 }
 ```
+
+`estimated_cost_usd == input_cost_usd + output_cost_usd`; `cost_by_provider` is the
+per-provider total, broken out by direction in `input_cost_by_provider` /
+`output_cost_by_provider`.
 
 ### Pricing
 
@@ -651,12 +661,12 @@ with an optional `default` — so models that charge more for audio/image than t
 priced correctly:
 
 ```python
-# app/config.py — the static / fallback table
+# app/config.py — the static / fallback table (USD per 1M tokens)
 PRICING = {
-    "gpt-5.4-nano":     {"input": 0.05, "output": 0.40},          # flat
-    "gemini-2.5-flash": {                                         # per-modality
-        "input":  {"text": 0.075, "image": 0.075, "audio": 0.30, "default": 0.075},
-        "output": {"text": 0.30, "default": 0.30},
+    "gpt-5-nano":       {"input": 0.05, "output": 0.40},          # flat
+    "gemini-2.5-flash": {                                         # per-modality (audio > text)
+        "input":  {"text": 0.30, "audio": 1.00, "default": 0.30},
+        "output": 2.50,
     },
 }
 ```
@@ -671,8 +681,8 @@ default 3600) to a JSON document shaped like `PRICING` (optionally wrapped in a 
 
 ```json
 { "models": {
-  "gemini-2.5-flash": { "input": {"text": 0.075, "audio": 0.30}, "output": {"text": 0.30} },
-  "gpt-5.4-nano":     { "input": 0.05, "output": 0.40 }
+  "gemini-2.5-flash": { "input": {"text": 0.30, "audio": 1.00}, "output": 2.50 },
+  "gpt-5-nano":       { "input": 0.05, "output": 0.40 }
 } }
 ```
 
@@ -728,10 +738,12 @@ include user prompts, image/audio URLs, audio data, or generated content.
   models, e.g. a `*-audio-preview` model.)
 - Provider auto-detection covers OpenAI and Gemini name prefixes; a model name
   with an unrecognized prefix returns `404`.
-- **Usage stats are stored in memory** (`InMemoryUsageStore`): they reset on
-  restart and are not shared across workers/instances. Swap in a SQLite/Postgres
-  implementation of `UsageStore` for durable, multi-instance history.
-- Pricing rates are placeholders — set real values in `PRICING`.
+- **Usage stats persist to SQLite when `USAGE_DB_PATH` is set** (`SQLiteUsageStore`,
+  the default in `.env.example`) — records survive restarts. Unset it to use the
+  in-memory store, which resets on restart. Neither is shared across instances; swap
+  in a Postgres implementation of `UsageStore` for multi-instance history.
+- Pricing rates are provider list prices verified June 2026; update `PRICING` (or a
+  hosted `PRICING_SOURCE_URL`) as they change.
 - Streaming token usage depends on the provider returning a final usage event
   (enabled for OpenAI via `stream_options` and captured from Gemini's last chunk).
 

@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # audio-capable default; otherwise the general default.
     default_model: str = "gpt-5.4-nano"
     default_audio_model: str = "gemini-2.5-flash"
+    # Where to persist usage records. Set to a file path (e.g. "data/usage.db") for
+    # a durable SQLite store that survives restarts; leave unset for the in-memory
+    # store (process-local, resets on restart).
+    usage_db_path: str | None = None
     # Optional hosted JSON of model prices (see app/services/pricing.py). When set,
     # it overrides the static PRICING table below and is refreshed on this interval.
     # When unset, only the static table is used.
@@ -87,19 +91,41 @@ def resolve_model(model: str) -> dict[str, str] | None:
 
 # Static / fallback pricing per provider model, in USD per 1,000,000 tokens.
 # This is the seed table and the fallback when no hosted source is configured (or
-# a fetch fails) — see app/services/pricing.py. These are PLACEHOLDER rates.
+# a fetch fails) — see app/services/pricing.py. Rates are provider *list prices*,
+# verified against the OpenAI and Google pricing pages (June 2026). Token-tiered
+# models (Gemini `*-pro`: <=200k vs >200k tokens) use the smaller-context tier —
+# the schema has no token-threshold dimension.
 #
 # Each side ("input"/"output") is either a flat number (same rate for every
-# modality) OR a per-modality map with an optional "default", e.g.:
+# modality) OR a per-modality map with an optional "default" (used for any modality
+# not listed — e.g. image/video fall back to the text rate), e.g.:
 #   "gemini-2.5-flash": {
-#       "input":  {"text": 0.075, "image": 0.075, "audio": 0.30, "default": 0.075},
-#       "output": {"text": 0.30, "default": 0.30},
+#       "input":  {"text": 0.30, "audio": 1.00, "default": 0.30},
+#       "output": 2.50,
 #   }
 # Cost is computed at query time, so edits here apply to historical usage too.
 PRICING: dict[str, dict] = {
-    "gpt-5.4-nano": {"input": 0.05, "output": 0.40},
-    "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
-    "gemini-3.1-flash-lite": {"input": 0.05, "output": 0.20},
+    # OpenAI — GPT-5 family (text/image; flat per-side rates). Current lineup is the
+    # 5.4 and 5.5 series; gpt-5 base is the original Aug-2025 release.
+    "gpt-5": {"input": 1.25, "output": 10.00},
+    "gpt-5-mini": {"input": 0.25, "output": 2.00},
+    "gpt-5-nano": {"input": 0.05, "output": 0.40},
+    "gpt-5.4": {"input": 2.50, "output": 15.00},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+    "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
+    "gpt-5.4-pro": {"input": 30.00, "output": 180.00},
+    "gpt-5.5": {"input": 5.00, "output": 30.00},  # latest flagship (Apr 2026)
+    "gpt-5.5-pro": {"input": 30.00, "output": 180.00},
+    # Google — Gemini 2.5+ family (audio priced above text on the input side;
+    # *-pro rates are the <=200k-token tier — the larger-context tier isn't modeled here).
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
+    "gemini-2.5-flash": {"input": {"text": 0.30, "audio": 1.00, "default": 0.30}, "output": 2.50},
+    "gemini-2.5-flash-lite": {"input": {"text": 0.10, "audio": 0.30, "default": 0.10}, "output": 0.40},
+    "gemini-3-pro": {"input": 2.00, "output": 12.00},
+    "gemini-3-flash": {"input": {"text": 0.50, "audio": 1.00, "default": 0.50}, "output": 3.00},
+    "gemini-3.1-pro": {"input": 2.00, "output": 12.00},
+    "gemini-3.1-flash-lite": {"input": {"text": 0.25, "audio": 0.50, "default": 0.25}, "output": 1.50},
+    "gemini-3.5-flash": {"input": 1.50, "output": 9.00},  # latest GA (May 2026)
 }
 
 

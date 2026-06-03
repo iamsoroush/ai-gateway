@@ -43,13 +43,17 @@ registry edit; the content-based default routes audio to an audio-capable model 
 → `404`. Evolved from "aliases only" per explicit product requests. See
 [architecture.md](architecture.md#request-lifecycle-chat-completions).
 
-### D5. Stores are in-memory, behind interfaces, on `app.state`
-**Decision.** `ProviderRouter` and `UsageStore` (`InMemoryUsageStore`) are constructed in
-`main.py` and held on `app.state`.
-**Why.** Matches the MVP "persistence later" scope while keeping a clean seam: tests swap
-fakes via `app.state`, and a durable store can replace the in-memory one with no other change.
-**Consequences.** Usage resets on restart and isn't shared across workers/instances. To make
-it durable, implement `UsageStore` over SQLite/Postgres and set `app.state.usage_store`.
+### D5. Stores are behind interfaces on `app.state`; usage store is selectable
+**Decision.** `ProviderRouter` and `UsageStore` are constructed in `main.py` and held on
+`app.state`. The usage store is chosen by config: `SQLiteUsageStore` when `USAGE_DB_PATH`
+is set (durable, survives restarts), else `InMemoryUsageStore` (process-local).
+**Why.** Keeps a clean seam — tests swap fakes via `app.state`, and the durable store was
+added behind the same `UsageStore` interface with no change to routes/aggregation. SQLite
+needs no external service, which fits the single-instance MVP.
+**Consequences.** Both stores hold only token counts (cost stays query-time, so price edits
+re-price history with no migration — see D10). SQLite is single-file and serialized with a
+lock: fine for one process, not shared across workers/instances — swap for Postgres for that.
+In-memory remains the default when `USAGE_DB_PATH` is unset and still resets on restart.
 
 ### D6. PHI-safe structured logging
 **Decision.** Logs are JSON metadata only (request id, model, provider, latency, errors);
@@ -91,10 +95,13 @@ bucket of a record separately.
 **Why.** Pricing changes should apply to historical usage; and some models charge
 different rates for audio/image vs text input, so a single blended rate misestimates
 multimodal traffic.
-**Consequences.** Rates are **placeholders** (notably the fictional `gpt-5.4-nano`) — set
-real values. Unpriced models contribute `0`. Where rates are configured as flat numbers,
-modality-aware costing reduces to the old totals × rate (backward compatible). The *source*
-of rates is pluggable — see D16.
+**Consequences.** The static table seeds **provider list prices** for the GPT-5+ and Gemini-2.5+
+families, verified against the OpenAI and Google pricing pages (June 2026). Token-tiered models
+(Gemini `*-pro`: ≤200k vs >200k tokens) use the smaller-context tier — the schema has no
+token-threshold dimension. Because cost is computed at query time, editing a rate re-prices all
+historical usage on the next query (no migration). Unpriced models contribute `0`. Where rates are
+configured as flat numbers, modality-aware costing reduces to the old totals × rate (backward
+compatible). The *source* of rates is pluggable — see D16.
 
 ### D11. Consistent error envelope via `GatewayError`
 **Decision.** Domain errors subclass `GatewayError` (carry `status_code`/`type`/`code`); one
@@ -115,11 +122,13 @@ service without changing any caller (they use `resolve_model` / `get_pricing`).
 **Why.** Host `8080` is commonly occupied (e.g. other local dev tools), which blocked startup.
 **Consequences.** Service is reached at `http://localhost:8081`. Container still listens on 8080.
 
-### D14. `gpt-5.4-nano` is a placeholder model name
-**Decision.** `report-large` maps to `gpt-5.4-nano` per an explicit request.
+### D14. `gpt-5.4-nano` model name (now a real model)
+**Decision.** `report-large` and `DEFAULT_MODEL` map to `gpt-5.4-nano` per an explicit request.
 **Why.** Requested by the product owner; the gateway forwards the name as-is.
-**Consequences.** It may not be a real OpenAI model — a live call could `502` if rejected.
-Swap it in `MODEL_REGISTRY` / `PRICING` when the real model is chosen.
+**Consequences.** Originally a placeholder that may not have existed, `gpt-5.4-nano` shipped as a
+real OpenAI model (GPT-5.4 nano tier, $0.20/$1.25 per 1M per the June-2026 pricing page), so live
+calls resolve and `PRICING` carries its real rate. Revisit the alias if the product picks a
+different size (`report-large` currently targets the *nano* tier).
 
 ### D15. Structured output (`response_format`) is honored by every provider
 **Decision.** The OpenAI `response_format` field flows through the canonical request

@@ -104,6 +104,36 @@ def _rate_for(side: object, modality: str) -> float:
     return 0.0
 
 
+def estimate_cost_breakdown(
+    rates: dict | None,
+    input_modality_tokens: dict[str, int],
+    output_modality_tokens: dict[str, int],
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> tuple[float, float]:
+    """Estimate ``(input_cost, output_cost)`` in USD from a model's ``rates``.
+
+    Prices each modality bucket at its own rate (falling back to a flat rate /
+    ``default`` / text). If no modality breakdown is present, falls back to the
+    plain input/output totals.
+    """
+    if not rates:
+        return 0.0, 0.0
+    inp, out = rates.get("input"), rates.get("output")
+    in_cost = out_cost = 0.0
+    if input_modality_tokens:
+        for modality, tokens in input_modality_tokens.items():
+            in_cost += tokens / 1_000_000 * _rate_for(inp, modality)
+    else:
+        in_cost += input_tokens / 1_000_000 * _rate_for(inp, "text")
+    if output_modality_tokens:
+        for modality, tokens in output_modality_tokens.items():
+            out_cost += tokens / 1_000_000 * _rate_for(out, modality)
+    else:
+        out_cost += output_tokens / 1_000_000 * _rate_for(out, "text")
+    return in_cost, out_cost
+
+
 def estimate_cost(
     rates: dict | None,
     input_modality_tokens: dict[str, int],
@@ -111,27 +141,11 @@ def estimate_cost(
     input_tokens: int = 0,
     output_tokens: int = 0,
 ) -> float:
-    """Estimate USD cost from a model's ``rates`` and its token breakdown.
-
-    Prices each modality bucket at its own rate (falling back to a flat rate /
-    ``default`` / text). If no modality breakdown is present, falls back to the
-    plain input/output totals.
-    """
-    if not rates:
-        return 0.0
-    inp, out = rates.get("input"), rates.get("output")
-    cost = 0.0
-    if input_modality_tokens:
-        for modality, tokens in input_modality_tokens.items():
-            cost += tokens / 1_000_000 * _rate_for(inp, modality)
-    else:
-        cost += input_tokens / 1_000_000 * _rate_for(inp, "text")
-    if output_modality_tokens:
-        for modality, tokens in output_modality_tokens.items():
-            cost += tokens / 1_000_000 * _rate_for(out, modality)
-    else:
-        cost += output_tokens / 1_000_000 * _rate_for(out, "text")
-    return cost
+    """Total USD cost — the sum of the input- and output-token spend."""
+    in_cost, out_cost = estimate_cost_breakdown(
+        rates, input_modality_tokens, output_modality_tokens, input_tokens, output_tokens
+    )
+    return in_cost + out_cost
 
 
 # --------------------------------------------------------------------------- #
@@ -150,7 +164,12 @@ class _Acc:
         self.total_tokens = 0
         self.input_by_modality: dict[str, int] = {}
         self.output_by_modality: dict[str, int] = {}
-        self.cost = 0.0
+        self.input_cost = 0.0
+        self.output_cost = 0.0
+
+    @property
+    def cost(self) -> float:
+        return self.input_cost + self.output_cost
 
     def add(self, rec: UsageRecord) -> None:
         self.requests += 1
@@ -161,13 +180,15 @@ class _Acc:
             self.input_by_modality[modality] = self.input_by_modality.get(modality, 0) + tokens
         for modality, tokens in rec.output_modality_tokens.items():
             self.output_by_modality[modality] = self.output_by_modality.get(modality, 0) + tokens
-        self.cost += estimate_cost(
+        in_cost, out_cost = estimate_cost_breakdown(
             self._price_of(rec.provider_model),
             rec.input_modality_tokens,
             rec.output_modality_tokens,
             rec.input_tokens,
             rec.output_tokens,
         )
+        self.input_cost += in_cost
+        self.output_cost += out_cost
 
     def to_aggregate(self) -> UsageAggregate:
         return UsageAggregate(
@@ -258,5 +279,9 @@ def summarize(
         output_tokens=totals.output_tokens,
         total_tokens=totals.total_tokens,
         estimated_cost_usd=round(totals.cost, _COST_DP),
+        input_cost_usd=round(totals.input_cost, _COST_DP),
+        output_cost_usd=round(totals.output_cost, _COST_DP),
         cost_by_provider={p: round(acc.cost, _COST_DP) for p, acc in by_provider.items()},
+        input_cost_by_provider={p: round(acc.input_cost, _COST_DP) for p, acc in by_provider.items()},
+        output_cost_by_provider={p: round(acc.output_cost, _COST_DP) for p, acc in by_provider.items()},
     )

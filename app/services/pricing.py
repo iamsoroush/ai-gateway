@@ -13,10 +13,10 @@ like ``config.PRICING`` (optionally wrapped in a top-level ``"models"`` key):
     {
       "models": {
         "gemini-2.5-flash": {
-          "input":  {"text": 0.075, "image": 0.075, "audio": 0.30, "default": 0.075},
-          "output": {"text": 0.30, "default": 0.30}
+          "input":  {"text": 0.30, "audio": 1.00, "default": 0.30},
+          "output": 2.50
         },
-        "gpt-5.4-nano": {"input": 0.05, "output": 0.40}
+        "gpt-5.4-nano": {"input": 0.20, "output": 1.25}
       }
     }
 """

@@ -127,7 +127,7 @@ Query params (all optional): `start`, `end` (ISO 8601; default last 30 days),
     "requests": 2, "input_tokens": 2000000, "output_tokens": 2000000, "total_tokens": 4000000,
     "input_by_modality": {"text": 1800000, "image": 200000},
     "output_by_modality": {"text": 2000000},
-    "estimated_cost_usd": 0.825
+    "estimated_cost_usd": 4.25
   },
   "by_provider": { "gemini": { /* same shape */ }, "openai": { /* ... */ } },
   "buckets": null
@@ -141,10 +141,17 @@ Params: `start`, `end`, `provider`.
 {
   "start": "...", "end": "...",
   "requests": 2, "input_tokens": 2000000, "output_tokens": 2000000, "total_tokens": 4000000,
-  "estimated_cost_usd": 0.825,
-  "cost_by_provider": {"gemini": 0.375, "openai": 0.45}
+  "estimated_cost_usd": 4.25,
+  "input_cost_usd": 0.5,
+  "output_cost_usd": 3.75,
+  "cost_by_provider": {"gemini": 2.8, "openai": 1.45},
+  "input_cost_by_provider": {"gemini": 0.3, "openai": 0.2},
+  "output_cost_by_provider": {"gemini": 2.5, "openai": 1.25}
 }
 ```
+Cost is split by token direction: `input_cost_usd` / `output_cost_usd` are the
+overall figures, and `*_cost_by_provider` break the same numbers down per provider.
+By construction `estimated_cost_usd == input_cost_usd + output_cost_usd`.
 
 ## Errors
 

@@ -18,3 +18,9 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Persisted usage database (SQLite + WAL sidecars)
+data/
+*.db
+*.db-wal
+*.db-shm

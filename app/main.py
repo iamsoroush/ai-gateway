@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.models.errors import ErrorBody, ErrorResponse, GatewayError
 from app.services.pricing import PricingService
 from app.services.router import ProviderRouter
-from app.services.usage_store import InMemoryUsageStore
+from app.services.usage_store import InMemoryUsageStore, SQLiteUsageStore
 from app.utils.logging import configure_logging, get_logger
 
 settings = get_settings()
@@ -27,8 +27,13 @@ app = FastAPI(title="ai-gateway", version="0.1.0")
 
 # Constructed once at startup. Tests may replace these.
 app.state.provider_router = ProviderRouter(settings)
-# In-memory MVP usage store; swap for a durable implementation later.
-app.state.usage_store = InMemoryUsageStore()
+# Usage store: durable SQLite when USAGE_DB_PATH is set (survives restarts),
+# else the process-local in-memory store. Same interface either way.
+app.state.usage_store = (
+    SQLiteUsageStore(settings.usage_db_path)
+    if settings.usage_db_path
+    else InMemoryUsageStore()
+)
 # Pricing: static table by default; a hosted JSON when PRICING_SOURCE_URL is set.
 app.state.pricing = PricingService(
     source_url=settings.pricing_source_url,

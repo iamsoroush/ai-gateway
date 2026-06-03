@@ -31,7 +31,7 @@ guess from this file alone.
 - Docker: `docker compose up --build` → http://localhost:8081 (host 8081 → container 8080)
 - Local: `uvicorn app.main:app --reload --port 8081`
 - Tests: `pytest` — uses `TestClient` + an injected **fake provider**; never calls real LLM APIs and needs no SDKs/keys.
-- Config: `.env` (see [.env.example](.env.example)) — `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEFAULT_MODEL`, `DEFAULT_AUDIO_MODEL`, `LOG_LEVEL`.
+- Config: `.env` (see [.env.example](.env.example)) — `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEFAULT_MODEL`, `DEFAULT_AUDIO_MODEL`, `LOG_LEVEL`, `USAGE_DB_PATH` (set → durable SQLite usage).
 
 ## Invariants — do not break these
 1. **The route contains no provider-specific logic.** It depends only on `BaseLLMProvider`. New provider = new adapter + register in `ProviderRouter`; the route does not change. *(decisions D2)*
@@ -39,7 +39,7 @@ guess from this file alone.
 3. **Never log or echo prompts, media URLs, audio, or generated content.** Logs are JSON metadata only. *(D6)*
 4. **Keep provider SDK imports lazy** (inside methods) so the app/tests load without `openai`/`google-genai` or keys. *(D3)*
 5. **Raise `GatewayError` subclasses, not bare `HTTPException`.** The handler in `main.py` renders the `{"error": {...}}` envelope. *(D11)*
-6. **Swappable stores live on `app.state`** behind interfaces (`ProviderRouter`, `UsageStore`). Usage is in-memory and resets on restart. *(D5)*
+6. **Swappable stores live on `app.state`** behind interfaces (`ProviderRouter`, `UsageStore`). Usage persists to SQLite when `USAGE_DB_PATH` is set, else in-memory (resets on restart). *(D5)*
 7. **Tests must not hit real providers.** Inject fakes via `app.state` (see [tests/conftest.py](tests/conftest.py)).
 8. **Keep responses OpenAI-SDK-compatible** — [tests/test_openai_sdk_compat.py](tests/test_openai_sdk_compat.py) must stay green. *(D1)*
 
@@ -52,6 +52,6 @@ guess from this file alone.
 ## Gotchas
 - `model` is **optional**: alias → raw name (provider inferred by prefix) → omitted (content-based default: audio→`DEFAULT_AUDIO_MODEL`, else `DEFAULT_MODEL`). *(D4)*
 - **Audio is Gemini-only** for now; audio to a GPT model → `400`. *(api-contract)*
-- Cost is **modality-aware** and prices load from `PRICING_SOURCE_URL` (hosted JSON) if set, else the static `PRICING` table; both are **placeholders** — not real. *(D10, D16)*
-- `gpt-5.4-nano` is a **placeholder** model name — possibly not real. *(D14)*
+- Cost is **modality-aware**; prices load from `PRICING_SOURCE_URL` (hosted JSON) if set, else the static `PRICING` table — provider list prices for the GPT-5+ / Gemini-2.5+ families, verified against the OpenAI/Google pricing pages (June 2026). *(D10, D16)*
+- `gpt-5.4-nano` (the `DEFAULT_MODEL` / `report-large` target) is a **real** OpenAI model (GPT-5.4 nano tier) — was originally a placeholder name. *(D14)*
 - Docker host port is **8081**, not 8080. *(D13)*

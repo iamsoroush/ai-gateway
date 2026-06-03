@@ -70,5 +70,12 @@ class UsageSummaryResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
+    # Estimated cost (USD), split by token direction. The ``*_cost_usd`` fields are
+    # the overall figures; the ``*_by_provider`` maps break the same numbers down
+    # per provider. By construction ``estimated_cost_usd == input_cost_usd + output_cost_usd``.
     estimated_cost_usd: float
+    input_cost_usd: float = 0.0
+    output_cost_usd: float = 0.0
     cost_by_provider: dict[str, float]
+    input_cost_by_provider: dict[str, float] = Field(default_factory=dict)
+    output_cost_by_provider: dict[str, float] = Field(default_factory=dict)
