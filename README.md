@@ -45,6 +45,9 @@ The FastAPI route never contains provider-specific logic — it depends only on 
 - **Structured output**: constrain responses to JSON or a JSON Schema via OpenAI's
   `response_format` — works on **both** OpenAI and Gemini (Gemini is translated to
   native JSON mode)
+- **Reasoning effort**: set OpenAI's `reasoning_effort` (`minimal`/`low`/`medium`/`high`)
+  on either provider — forwarded to OpenAI, translated to Gemini's `thinking_level`
+  (3+) or `thinking_budget` (2.5)
 - Flexible model selection: registered **aliases**, **any raw model name**
   (provider auto-detected), or **omit `model`** to auto-pick by content
 - Usage stats: token usage by provider and modality (text/image/audio) over a
@@ -552,6 +555,28 @@ print(resp.choices[0].message.content)  # a JSON string
 ```
 
 </details>
+
+### Reasoning effort (thinking)
+
+Set how hard the model "thinks" with OpenAI's `reasoning_effort`
+(`minimal` | `low` | `medium` | `high`) — the same call works on both providers. The
+gateway forwards it to OpenAI and translates it to Gemini's thinking controls
+(`thinking_level` on Gemini 3+, an integer `thinking_budget` on Gemini 2.5).
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8081/v1", api_key="unused")
+resp = client.chat.completions.create(
+    model="report-fast",  # Gemini → translated to a thinking budget/level
+    messages=[{"role": "user", "content": "Plan a careful differential diagnosis."}],
+    reasoning_effort="high",
+)
+print(resp.choices[0].message.content)
+```
+
+Omit `reasoning_effort` for each provider's default behavior. An unknown value returns
+`422`; sending it to a model without reasoning support surfaces the provider's own error.
 
 ### Streaming response (SSE) format
 

@@ -141,6 +141,47 @@ def test_response_format_forwarded_to_provider():
     assert captured["response_format"] == rf
 
 
+def test_reasoning_effort_forwarded_to_provider(fake_client):
+    # A valid reasoning_effort is accepted and carried into the canonical request.
+    captured = {}
+
+    class CapturingProvider(FakeProvider):
+        async def complete(self, request):
+            captured["reasoning_effort"] = request.reasoning_effort
+            return await super().complete(request)
+
+    original = app.state.provider_router
+    app.state.provider_router = FakeRouter(CapturingProvider())
+    try:
+        with TestClient(app) as test_client:
+            resp = test_client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "report-fast",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "reasoning_effort": "high",
+                },
+            )
+    finally:
+        app.state.provider_router = original
+
+    assert resp.status_code == 200
+    assert captured["reasoning_effort"] == "high"
+
+
+def test_invalid_reasoning_effort_returns_422(fake_client):
+    resp = fake_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "report-fast",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "ultra",  # not one of minimal/low/medium/high
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["type"] == "invalid_request_error"
+
+
 def test_default_model_with_audio(fake_client):
     # No "model" + audio -> the configured audio default (DEFAULT_AUDIO_MODEL).
     resp = fake_client.post(

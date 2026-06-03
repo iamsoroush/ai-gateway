@@ -74,6 +74,9 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     response_format: dict | None = None
+    # Reasoning/"thinking" effort (OpenAI-style). Forwarded natively to OpenAI and
+    # translated to Gemini's thinking controls — see services.normalizer / providers.
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
     metadata: dict | None = None
 
 

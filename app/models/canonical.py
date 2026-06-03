@@ -41,6 +41,9 @@ class CanonicalLLMRequest(BaseModel):
     max_tokens: int | None = None
     stream: bool = False
     response_format: dict | None = None
+    # Reasoning effort: "minimal" | "low" | "medium" | "high". Providers translate
+    # this to their own thinking controls (OpenAI reasoning_effort, Gemini thinking).
+    reasoning_effort: str | None = None
     metadata: dict | None = None
 
 

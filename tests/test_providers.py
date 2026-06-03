@@ -133,3 +133,49 @@ def test_openai_build_kwargs_forwards_response_format():
     request = _text_request("openai", "gpt-4o", response_format=rf)
     kwargs = OpenAIProvider()._build_kwargs(request, messages=[])
     assert kwargs["response_format"] == rf
+
+
+def test_openai_build_kwargs_forwards_reasoning_effort():
+    # OpenAI accepts reasoning_effort natively; forward it when set, omit otherwise.
+    req = _text_request("openai", "gpt-5.4-nano", reasoning_effort="high")
+    assert OpenAIProvider()._build_kwargs(req, messages=[])["reasoning_effort"] == "high"
+    plain = _text_request("openai", "gpt-5.4-nano")
+    assert "reasoning_effort" not in OpenAIProvider()._build_kwargs(plain, messages=[])
+
+
+def test_gemini_thinking_spec_maps_effort_by_model_family():
+    from app.providers.gemini_provider import _thinking_spec
+
+    # No effort -> no thinking control.
+    assert _thinking_spec("gemini-2.5-flash", None) is None
+    # Gemini 2.5 -> integer thinking_budget (minimal=off, high=dynamic).
+    assert _thinking_spec("gemini-2.5-flash", "minimal") == ("thinking_budget", 0)
+    assert _thinking_spec("gemini-2.5-flash", "medium") == ("thinking_budget", 8192)
+    assert _thinking_spec("gemini-2.5-flash", "high") == ("thinking_budget", -1)
+    # Gemini 3+ -> thinking_level (1:1 with the effort names).
+    assert _thinking_spec("gemini-3-pro", "low") == ("thinking_level", "LOW")
+    assert _thinking_spec("models/gemini-3.5-flash", "high") == ("thinking_level", "HIGH")
+
+
+def test_gemini_build_applies_thinking_config():
+    pytest.importorskip("google.genai")
+    import asyncio
+
+    # 2.5 model -> thinking_budget on the config.
+    _, cfg25 = asyncio.run(
+        GeminiProvider()._build(_text_request("gemini", "gemini-2.5-flash", reasoning_effort="medium"))
+    )
+    assert cfg25.thinking_config is not None
+    assert cfg25.thinking_config.thinking_budget == 8192
+
+    # 3.x model -> thinking_level enum on the config.
+    from google.genai.types import ThinkingLevel
+
+    _, cfg3 = asyncio.run(
+        GeminiProvider()._build(_text_request("gemini", "gemini-3-pro", reasoning_effort="high"))
+    )
+    assert cfg3.thinking_config.thinking_level == ThinkingLevel.HIGH
+
+    # No reasoning_effort -> no thinking_config imposed.
+    _, plain = asyncio.run(GeminiProvider()._build(_text_request("gemini", "gemini-2.5-flash")))
+    assert plain.thinking_config is None

@@ -136,6 +136,9 @@ class OpenAIProvider(BaseLLMProvider):
             kwargs["max_tokens"] = request.max_tokens
         if request.response_format is not None:
             kwargs["response_format"] = request.response_format
+        # OpenAI accepts reasoning_effort natively on reasoning-capable models.
+        if request.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = request.reasoning_effort
         return kwargs
 
     async def complete(self, request: CanonicalLLMRequest) -> CanonicalLLMResponse:

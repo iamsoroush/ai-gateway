@@ -47,6 +47,7 @@ Lists only registered aliases; raw pass-through model names are not enumerated.
   "temperature": 0.2,            // optional
   "max_tokens": 2000,            // optional
   "response_format": { },        // optional, structured output — see below
+  "reasoning_effort": "medium",  // optional, "minimal"|"low"|"medium"|"high" — see below
   "metadata": { }                // optional, ignored by providers
 }
 ```
@@ -80,6 +81,22 @@ which provider serves the request:
 - Via the **OpenAI SDK**, `client.chat.completions.parse(response_format=PydanticModel)`
   works against either provider — the SDK sends the `json_schema` form and parses the
   JSON back into your model. Unrecognized `response_format` shapes impose no constraint.
+
+### Reasoning effort (`reasoning_effort`)
+Control how much a model "thinks" before answering, using the standard OpenAI
+`reasoning_effort` field — `minimal` | `low` | `medium` | `high`. Set it the same way
+regardless of provider; the gateway translates per provider:
+
+| Provider | Translation |
+| -------- | ----------- |
+| **OpenAI** | Forwarded as-is (`reasoning_effort`) to reasoning-capable models. |
+| **Gemini 3+** | Mapped to `thinking_level` (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH` — a 1:1 match). |
+| **Gemini 2.5** | Mapped to a `thinking_budget`: `minimal`→`0` (off where allowed), `low`→`1024`, `medium`→`8192`, `high`→`-1` (dynamic). Budgets are clamped to the model's range. |
+
+- Omitting the field applies no thinking control (each provider's default behavior).
+- Via the **OpenAI SDK**: `client.chat.completions.create(..., reasoning_effort="high")`.
+- An unrecognized value is rejected with `422`. Sending an effort to a model that doesn't
+  support reasoning surfaces the provider's own error.
 
 ### Model selection
 1. **Registered alias** (`report-fast`, `report-large`) → `MODEL_REGISTRY`.

@@ -94,6 +94,7 @@ def normalize_request(req: ChatCompletionRequest) -> CanonicalLLMRequest:
         max_tokens=req.max_tokens,
         stream=req.stream,
         response_format=req.response_format,
+        reasoning_effort=req.reasoning_effort,
         metadata=req.metadata,
     )
 

@@ -52,6 +52,7 @@ guess from this file alone.
 ## Gotchas
 - `model` is **optional**: alias → raw name (provider inferred by prefix) → omitted (content-based default: audio→`DEFAULT_AUDIO_MODEL`, else `DEFAULT_MODEL`). *(D4)*
 - **Audio is Gemini-only** for now; audio to a GPT model → `400`. *(api-contract)*
+- **Reasoning** uses OpenAI's `reasoning_effort` (`minimal|low|medium|high`): forwarded to OpenAI, translated in the Gemini adapter to `thinking_level` (Gemini 3+) or `thinking_budget` (Gemini 2.5). *(D17)*
 - Cost is **modality-aware**; prices load from `PRICING_SOURCE_URL` (hosted JSON) if set, else the static `PRICING` table — provider list prices for the GPT-5+ / Gemini-2.5+ families, verified against the OpenAI/Google pricing pages (June 2026). *(D10, D16)*
 - `gpt-5.4-nano` (the `DEFAULT_MODEL` / `report-large` target) is a **real** OpenAI model (GPT-5.4 nano tier) — was originally a placeholder name. *(D14)*
 - Docker host port is **8081**, not 8080. *(D13)*

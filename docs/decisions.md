@@ -170,6 +170,21 @@ JSON is shaped like `config.PRICING` (optionally under a `"models"` key). Aggreg
 `price_of` as a parameter (default `config.get_pricing`) so unit tests price against the
 static table while the route prices against the live service.
 
+### D17. Reasoning effort via OpenAI's `reasoning_effort`, translated per provider
+**Decision.** The public knob for "thinking" is OpenAI's `reasoning_effort`
+(`minimal`/`low`/`medium`/`high`), carried on the canonical request. OpenAI forwards it
+natively; Gemini translates it in the adapter — `thinking_level` for Gemini 3+ (its enum
+matches the effort names 1:1), an integer `thinking_budget` for Gemini 2.5
+(`_thinking_spec` in [../app/providers/gemini_provider.py](../app/providers/gemini_provider.py)).
+**Why.** Callers already use the OpenAI SDK, so one OpenAI-shaped field keeps the contract
+provider-agnostic (invariant: translate at the edges, providers speak canonical). Gemini's
+two thinking mechanisms are a provider detail that belongs in its adapter, not the route.
+**Consequences.** Omitting the field keeps each provider's default behavior. Gemini 2.5
+budgets are approximate and clamped by the API to the model's range (`minimal`→`0` can't
+disable thinking on models that don't allow it). Sending an effort to a non-reasoning model
+surfaces the provider's error; an unknown value is a `422` (validated by the `Literal`).
+New levels are a one-line change to the contract + the two Gemini maps.
+
 ---
 
 ## Anticipated (not yet built)

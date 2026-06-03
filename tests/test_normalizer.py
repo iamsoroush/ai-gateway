@@ -64,6 +64,14 @@ def test_normalize_passes_response_format_through():
     assert canonical.response_format == rf
 
 
+def test_normalize_passes_reasoning_effort_through():
+    # reasoning_effort is carried into the canonical request for the provider to
+    # translate (OpenAI native, Gemini thinking controls).
+    assert normalize_request(_request(reasoning_effort="high")).reasoning_effort == "high"
+    # Absent -> None (no thinking control applied).
+    assert normalize_request(_request()).reasoning_effort is None
+
+
 def test_normalize_unknown_model_raises():
     # Not a registered alias and not a recognizable provider model name.
     with pytest.raises(UnknownModelError):

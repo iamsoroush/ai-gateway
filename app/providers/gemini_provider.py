@@ -62,6 +62,31 @@ def _structured_output(response_format: dict | None) -> tuple[str | None, dict |
     return None, None
 
 
+# OpenAI reasoning_effort -> Gemini thinking controls. Gemini 3+ models take a
+# `thinking_level` (its enum members line up 1:1 with the effort levels); Gemini
+# 2.5 models take an integer `thinking_budget` (0 = off where allowed, -1 = let the
+# model decide). Budgets are model-dependent and clamped by the API to its range.
+_EFFORT_TO_LEVEL = {"minimal": "MINIMAL", "low": "LOW", "medium": "MEDIUM", "high": "HIGH"}
+_EFFORT_TO_BUDGET = {"minimal": 0, "low": 1024, "medium": 8192, "high": -1}
+
+
+def _thinking_spec(provider_model: str, effort: str | None) -> tuple[str, object] | None:
+    """Resolve a ``(ThinkingConfig field, value)`` for an effort, or ``None``.
+
+    Returns the *field name* and value to set on Gemini's ``ThinkingConfig`` so the
+    caller (which holds the lazily-imported SDK ``types``) can build it. Gemini 3+
+    uses ``thinking_level``; older (2.x) models use ``thinking_budget``.
+    """
+    if not effort:
+        return None
+    name = provider_model.lower().removeprefix("models/")
+    if name.startswith("gemini-3"):
+        level = _EFFORT_TO_LEVEL.get(effort)
+        return ("thinking_level", level) if level is not None else None
+    budget = _EFFORT_TO_BUDGET.get(effort)
+    return ("thinking_budget", budget) if budget is not None else None
+
+
 def _to_canonical_usage(meta) -> CanonicalUsage | None:
     """Map Gemini usage_metadata to CanonicalUsage with a modality breakdown."""
     if meta is None:
@@ -154,6 +179,20 @@ class GeminiProvider(BaseLLMProvider):
                 else "response_schema"
             )
             config_kwargs[field] = json_schema
+
+        spec = _thinking_spec(request.provider_model, request.reasoning_effort)
+        if spec is not None and "thinking_config" in types.GenerateContentConfig.model_fields:
+            tf_field, tf_value = spec
+            # thinking_level is an enum; resolve the member (fall back to a budget
+            # on SDKs too old to know thinking_level).
+            if tf_field == "thinking_level":
+                if hasattr(types, "ThinkingLevel"):
+                    tf_value = getattr(types.ThinkingLevel, tf_value)
+                else:
+                    tf_field = "thinking_budget"
+                    tf_value = _EFFORT_TO_BUDGET.get(request.reasoning_effort, -1)
+            config_kwargs["thinking_config"] = types.ThinkingConfig(**{tf_field: tf_value})
+
         config = types.GenerateContentConfig(**config_kwargs)
         return contents, config
 
