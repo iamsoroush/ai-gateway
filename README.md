@@ -149,7 +149,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 | Method | Path                   | Description                                   |
 | ------ | ---------------------- | --------------------------------------------- |
 | GET    | `/health`              | Liveness check                                |
-| GET    | `/v1/models`           | List internal model aliases + providers       |
+| GET    | `/v1/models`           | List aliases and callable provider models      |
 | POST   | `/v1/chat/completions` | OpenAI-compatible chat completion             |
 | GET    | `/v1/usage`            | Token usage by provider + modality, with cost, failures + latency |
 | GET    | `/v1/usage/summary`    | Overall usage totals + estimated cost + failures + latency |
@@ -168,7 +168,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
   "object": "list",
   "data": [
     { "id": "report-fast", "object": "model", "provider": "gemini", "provider_model": "gemini-2.5-flash" },
-    { "id": "report-large", "object": "model", "provider": "openai", "provider_model": "gpt-5.4-nano" }
+    { "id": "report-large", "object": "model", "provider": "openai", "provider_model": "gpt-5.4-nano" },
+    { "id": "gpt-5.4-nano", "object": "model", "provider": "openai", "provider_model": "gpt-5.4-nano" },
+    { "id": "gemini-3.5-flash", "object": "model", "provider": "gemini", "provider_model": "gemini-3.5-flash" }
   ]
 }
 ```
@@ -203,7 +205,9 @@ The `model` field of a chat request accepts **any** of the following:
 > unsupported_content_type`. Use a Gemini model for audio — which is exactly why
 > the no-`model` audio default is `gemini-2.5-flash`.
 
-`GET /v1/models` lists the registered aliases; raw pass-through names are not enumerated.
+`GET /v1/models` lists registered aliases plus a curated set of callable,
+general-purpose raw model IDs. Other raw pass-through names may still work when
+their provider can be inferred, but specialist and date-pinned variants are not enumerated.
 
 ## Typed client (recommended)
 

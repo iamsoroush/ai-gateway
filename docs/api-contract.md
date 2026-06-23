@@ -15,7 +15,7 @@ The public surface mirrors the **OpenAI Chat Completions** API, so the official
 | Method | Path                   | Purpose |
 | ------ | ---------------------- | ------- |
 | GET    | `/health`              | Liveness. |
-| GET    | `/v1/models`           | List registered model aliases + their providers. |
+| GET    | `/v1/models`           | List registered aliases and callable provider models. |
 | POST   | `/v1/chat/completions` | Chat completion (streaming or not, multimodal). |
 | GET    | `/v1/usage`            | Token usage by provider + modality over a window, with cost, failures + latency. |
 | GET    | `/v1/usage/summary`    | Overall usage totals + estimated cost + failures + latency. |
@@ -32,10 +32,13 @@ No authentication (MVP).
 ```json
 {"object": "list", "data": [
   {"id": "report-fast", "object": "model", "provider": "gemini", "provider_model": "gemini-2.5-flash"},
-  {"id": "report-large", "object": "model", "provider": "openai", "provider_model": "gpt-5.4-nano"}
+  {"id": "report-large", "object": "model", "provider": "openai", "provider_model": "gpt-5.4-nano"},
+  {"id": "gpt-5.4-nano", "object": "model", "provider": "openai", "provider_model": "gpt-5.4-nano"},
+  {"id": "gemini-3.5-flash", "object": "model", "provider": "gemini", "provider_model": "gemini-3.5-flash"}
 ]}
 ```
-Lists only registered aliases; raw pass-through model names are not enumerated.
+The response is a curated catalog of stable/general-purpose models supported by
+the gateway, not a live proxy of either provider's account-level model-list API.
 
 ## `POST /v1/chat/completions`
 

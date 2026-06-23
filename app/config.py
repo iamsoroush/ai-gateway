@@ -54,6 +54,32 @@ MODEL_REGISTRY: dict[str, dict[str, str]] = {
     },
 }
 
+# Callable, general-purpose model IDs advertised by ``GET /v1/models``. Keep
+# this separate from MODEL_REGISTRY (caller-friendly aliases) and PRICING (cost
+# metadata): neither is an authoritative catalog of selectable models.
+# Date-pinned and specialist image/TTS/search models are intentionally omitted.
+MODEL_CATALOG: dict[str, str] = {
+    # OpenAI
+    "gpt-5": "openai",
+    "gpt-5-mini": "openai",
+    "gpt-5-nano": "openai",
+    "gpt-5.4": "openai",
+    "gpt-5.4-mini": "openai",
+    "gpt-5.4-nano": "openai",
+    "gpt-5.4-pro": "openai",
+    "gpt-5.5": "openai",
+    "gpt-5.5-pro": "openai",
+    # Google Gemini
+    "gemini-2.5-pro": "gemini",
+    "gemini-2.5-flash": "gemini",
+    "gemini-2.5-flash-lite": "gemini",
+    "gemini-3-pro-preview": "gemini",
+    "gemini-3-flash-preview": "gemini",
+    "gemini-3.1-pro-preview": "gemini",
+    "gemini-3.1-flash-lite": "gemini",
+    "gemini-3.5-flash": "gemini",
+}
+
 # When a caller passes a bare model name that is not a registered alias, the
 # provider is inferred from the model name prefix. Order matters: the first
 # matching provider wins. Extend this list as new providers/models appear.
@@ -121,9 +147,9 @@ PRICING: dict[str, dict] = {
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
     "gemini-2.5-flash": {"input": {"text": 0.30, "audio": 1.00, "default": 0.30}, "output": 2.50},
     "gemini-2.5-flash-lite": {"input": {"text": 0.10, "audio": 0.30, "default": 0.10}, "output": 0.40},
-    "gemini-3-pro": {"input": 2.00, "output": 12.00},
-    "gemini-3-flash": {"input": {"text": 0.50, "audio": 1.00, "default": 0.50}, "output": 3.00},
-    "gemini-3.1-pro": {"input": 2.00, "output": 12.00},
+    "gemini-3-pro-preview": {"input": 2.00, "output": 12.00},
+    "gemini-3-flash-preview": {"input": {"text": 0.50, "audio": 1.00, "default": 0.50}, "output": 3.00},
+    "gemini-3.1-pro-preview": {"input": 2.00, "output": 12.00},
     "gemini-3.1-flash-lite": {"input": {"text": 0.25, "audio": 0.50, "default": 0.25}, "output": 1.50},
     "gemini-3.5-flash": {"input": 1.50, "output": 9.00},  # latest GA (May 2026)
 }

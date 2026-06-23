@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.config import MODEL_REGISTRY
+from app.config import MODEL_CATALOG, MODEL_REGISTRY
 from app.models.canonical import CanonicalLLMRequest, CanonicalLLMResponse, CanonicalUsage
 from app.models.errors import GatewayError
 from app.models.openai_contract import (
@@ -184,11 +184,15 @@ async def health() -> dict:
 
 @router.get("/v1/models", response_model=ModelList)
 async def list_models() -> ModelList:
-    data = [
+    aliases = [
         ModelCard(id=alias, provider=cfg["provider"], provider_model=cfg["provider_model"])
         for alias, cfg in MODEL_REGISTRY.items()
     ]
-    return ModelList(data=data)
+    provider_models = [
+        ModelCard(id=model_id, provider=provider, provider_model=model_id)
+        for model_id, provider in MODEL_CATALOG.items()
+    ]
+    return ModelList(data=aliases + provider_models)
 
 
 def _build_usage(usage) -> Usage | None:
