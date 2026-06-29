@@ -81,6 +81,7 @@ class UsageBucket(BaseModel):
     start: datetime
     totals: UsageAggregate
     by_provider: dict[str, UsageAggregate]
+    by_model: dict[str, UsageAggregate] = Field(default_factory=dict)
 
 
 class UsageStatsResponse(BaseModel):
@@ -91,6 +92,7 @@ class UsageStatsResponse(BaseModel):
     interval: str | None = None
     totals: UsageAggregate
     by_provider: dict[str, UsageAggregate]
+    by_model: dict[str, UsageAggregate] = Field(default_factory=dict)
     buckets: list[UsageBucket] | None = None
 
 
@@ -116,6 +118,10 @@ class UsageSummaryResponse(BaseModel):
     input_cost_by_provider: dict[str, float] = Field(default_factory=dict)
     output_cost_by_provider: dict[str, float] = Field(default_factory=dict)
     embedding_cost_by_provider: dict[str, float] = Field(default_factory=dict)
+    cost_by_model: dict[str, float] = Field(default_factory=dict)
+    input_cost_by_model: dict[str, float] = Field(default_factory=dict)
+    output_cost_by_model: dict[str, float] = Field(default_factory=dict)
+    embedding_cost_by_model: dict[str, float] = Field(default_factory=dict)
     # Latency over records that report one (None when no records carry latency).
     latency_ms_avg: float | None = None
     latency_ms_p50: float | None = None

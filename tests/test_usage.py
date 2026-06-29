@@ -51,6 +51,8 @@ def test_aggregate_totals_modality_and_cost():
     # cost: gemini 1M input @0.30 + 1M output @2.50 = 2.80 ; openai 1M*0.20 + 1M*1.25 = 1.45
     assert stats.by_provider["gemini"].estimated_cost_usd == 2.80
     assert stats.by_provider["openai"].estimated_cost_usd == 1.45
+    assert stats.by_model["gemini-2.5-flash"].estimated_cost_usd == 2.80
+    assert stats.by_model["gpt-5.4-nano"].estimated_cost_usd == 1.45
     assert stats.totals.estimated_cost_usd == 4.25
 
 
@@ -72,6 +74,7 @@ def test_aggregate_daily_buckets():
     assert len(stats.buckets) == 2  # two distinct days
     # first bucket is the gemini record's day
     assert "gemini" in stats.buckets[0].by_provider
+    assert "gemini-2.5-flash" in stats.buckets[0].by_model
     assert stats.buckets[0].totals.requests == 1
 
 
@@ -86,6 +89,7 @@ def test_summarize_overall_and_cost_by_provider():
     assert summary.total_tokens == 4_000_000
     assert summary.estimated_cost_usd == 4.25
     assert summary.cost_by_provider == {"gemini": 2.80, "openai": 1.45}
+    assert summary.cost_by_model == {"gemini-2.5-flash": 2.80, "gpt-5.4-nano": 1.45}
 
     # Input/output split, overall and per provider.
     # gemini: input 1M*0.30=0.30, output 1M*2.50=2.50 ; openai: 1M*0.20=0.20, 1M*1.25=1.25
@@ -94,8 +98,11 @@ def test_summarize_overall_and_cost_by_provider():
     assert summary.input_cost_usd + summary.output_cost_usd == summary.estimated_cost_usd
     assert summary.input_cost_by_provider == {"gemini": 0.30, "openai": 0.20}
     assert summary.output_cost_by_provider == {"gemini": 2.50, "openai": 1.25}
+    assert summary.input_cost_by_model == {"gemini-2.5-flash": 0.30, "gpt-5.4-nano": 0.20}
+    assert summary.output_cost_by_model == {"gemini-2.5-flash": 2.50, "gpt-5.4-nano": 1.25}
     assert summary.embedding_cost_usd == 0.0
     assert summary.embedding_cost_by_provider == {}
+    assert summary.embedding_cost_by_model == {}
 
 
 def test_embedding_costs_are_included_and_broken_out():
@@ -119,6 +126,8 @@ def test_embedding_costs_are_included_and_broken_out():
     assert stats.totals.embedding_cost_usd == 0.02
     assert stats.by_provider["openai"].estimated_cost_usd == 1.47
     assert stats.by_provider["openai"].embedding_cost_usd == 0.02
+    assert stats.by_model["text-embedding-3-small"].estimated_cost_usd == 0.02
+    assert stats.by_model["text-embedding-3-small"].embedding_cost_usd == 0.02
 
     summary = summarize(records, start=start, end=end)
     assert summary.estimated_cost_usd == 4.27
@@ -129,6 +138,22 @@ def test_embedding_costs_are_included_and_broken_out():
     assert summary.output_cost_by_provider == {"gemini": 2.50, "openai": 1.25}
     assert summary.embedding_cost_usd == 0.02
     assert summary.embedding_cost_by_provider == {"openai": 0.02}
+    assert summary.cost_by_model == {
+        "gemini-2.5-flash": 2.80,
+        "gpt-5.4-nano": 1.45,
+        "text-embedding-3-small": 0.02,
+    }
+    assert summary.input_cost_by_model == {
+        "gemini-2.5-flash": 0.30,
+        "gpt-5.4-nano": 0.20,
+        "text-embedding-3-small": 0.02,
+    }
+    assert summary.output_cost_by_model == {
+        "gemini-2.5-flash": 2.50,
+        "gpt-5.4-nano": 1.25,
+        "text-embedding-3-small": 0.0,
+    }
+    assert summary.embedding_cost_by_model == {"text-embedding-3-small": 0.02}
 
 
 # --------------------------------------------------------------------------- #
@@ -223,9 +248,11 @@ def test_usage_endpoint_modality_and_provider_filter(usage_client):
     assert full["totals"]["requests"] == 2
     assert full["totals"]["input_by_modality"] == {"text": 70, "audio": 40}
     assert set(full["by_provider"]) == {"gemini", "openai"}
+    assert set(full["by_model"]) == {"gemini-2.5-flash", "gpt-5.4-nano"}
 
     only_gemini = client.get("/v1/usage", params={"provider": "gemini"}).json()
     assert set(only_gemini["by_provider"]) == {"gemini"}
+    assert set(only_gemini["by_model"]) == {"gemini-2.5-flash"}
     assert only_gemini["totals"]["input_by_modality"] == {"text": 60, "audio": 40}
 
 

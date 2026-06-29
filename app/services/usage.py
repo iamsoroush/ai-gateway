@@ -223,16 +223,19 @@ class _Acc:
 
 def _accumulate(
     records: list[RequestRecord], price_of: PriceOf
-) -> tuple[_Acc, dict[str, _Acc]]:
+) -> tuple[_Acc, dict[str, _Acc], dict[str, _Acc]]:
     totals = _Acc(price_of)
     by_provider: dict[str, _Acc] = {}
+    by_model: dict[str, _Acc] = {}
     for rec in records:
         totals.add(rec)
         # Records that failed before model resolution have no provider; they count
         # toward totals/failed_requests but are not bucketed under a null provider.
         if rec.provider is not None:
             by_provider.setdefault(rec.provider, _Acc(price_of)).add(rec)
-    return totals, by_provider
+        if rec.provider_model is not None:
+            by_model.setdefault(rec.provider_model, _Acc(price_of)).add(rec)
+    return totals, by_provider, by_model
 
 
 def _bucket_start(ts: datetime, interval: str) -> datetime:
@@ -256,7 +259,7 @@ def aggregate(
     price_of: PriceOf | None = None,
 ) -> UsageStatsResponse:
     price_of = price_of or get_pricing
-    totals, by_provider = _accumulate(records, price_of)
+    totals, by_provider, by_model = _accumulate(records, price_of)
 
     buckets: list[UsageBucket] | None = None
     if interval:
@@ -265,12 +268,13 @@ def aggregate(
             grouped.setdefault(_bucket_start(rec.timestamp, interval), []).append(rec)
         buckets = []
         for bucket_start in sorted(grouped):
-            b_totals, b_by_provider = _accumulate(grouped[bucket_start], price_of)
+            b_totals, b_by_provider, b_by_model = _accumulate(grouped[bucket_start], price_of)
             buckets.append(
                 UsageBucket(
                     start=bucket_start,
                     totals=b_totals.to_aggregate(),
                     by_provider={p: acc.to_aggregate() for p, acc in b_by_provider.items()},
+                    by_model={m: acc.to_aggregate() for m, acc in b_by_model.items()},
                 )
             )
 
@@ -280,6 +284,7 @@ def aggregate(
         interval=interval,
         totals=totals.to_aggregate(),
         by_provider={p: acc.to_aggregate() for p, acc in by_provider.items()},
+        by_model={m: acc.to_aggregate() for m, acc in by_model.items()},
         buckets=buckets,
     )
 
@@ -292,7 +297,7 @@ def summarize(
     price_of: PriceOf | None = None,
 ) -> UsageSummaryResponse:
     price_of = price_of or get_pricing
-    totals, by_provider = _accumulate(records, price_of)
+    totals, by_provider, by_model = _accumulate(records, price_of)
     latency_avg, latency_p50 = _latency_stats(totals.latencies)
     return UsageSummaryResponse(
         start=start,
@@ -312,6 +317,14 @@ def summarize(
         embedding_cost_by_provider={
             p: round(acc.embedding_cost, _COST_DP)
             for p, acc in by_provider.items()
+            if acc.embedding_cost
+        },
+        cost_by_model={m: round(acc.cost, _COST_DP) for m, acc in by_model.items()},
+        input_cost_by_model={m: round(acc.input_cost, _COST_DP) for m, acc in by_model.items()},
+        output_cost_by_model={m: round(acc.output_cost, _COST_DP) for m, acc in by_model.items()},
+        embedding_cost_by_model={
+            m: round(acc.embedding_cost, _COST_DP)
+            for m, acc in by_model.items()
             if acc.embedding_cost
         },
         latency_ms_avg=latency_avg,

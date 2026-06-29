@@ -58,6 +58,8 @@ def test_embeddings_are_recorded(usage_client):
     assert summary["input_cost_usd"] == 0.00000008
     assert summary["embedding_cost_usd"] == 0.00000008
     assert summary["embedding_cost_by_provider"] == {"openai": 0.00000008}
+    assert summary["cost_by_model"] == {"text-embedding-3-small": 0.00000008}
+    assert summary["embedding_cost_by_model"] == {"text-embedding-3-small": 0.00000008}
 
     now = datetime.now(timezone.utc).isoformat()
     requests = client.get("/v1/requests", params={"end": now}).json()["data"]

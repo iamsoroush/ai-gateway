@@ -729,12 +729,16 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
     "gemini": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 2.80, "...": "..." },
     "openai": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 1.45, "...": "..." }
   },
+  "by_model": {
+    "gemini-2.5-flash": { "requests": 1, "estimated_cost_usd": 2.80, "...": "..." },
+    "gpt-5.4-nano": { "requests": 1, "estimated_cost_usd": 1.45, "...": "..." }
+  },
   "buckets": null
 }
 ```
 
 When `interval` is given, `buckets` is a time-series (one entry per period) with
-the same `totals` + `by_provider` shape.
+the same `totals` + `by_provider` + `by_model` shape.
 
 ### `GET /v1/usage/summary`
 
@@ -763,6 +767,10 @@ curl "http://localhost:8081/v1/usage/summary"
   "input_cost_by_provider": { "gemini": 0.3, "openai": 0.2 },
   "output_cost_by_provider": { "gemini": 2.5, "openai": 1.25 },
   "embedding_cost_by_provider": {},
+  "cost_by_model": { "gemini-2.5-flash": 2.8, "gpt-5.4-nano": 1.45 },
+  "input_cost_by_model": { "gemini-2.5-flash": 0.3, "gpt-5.4-nano": 0.2 },
+  "output_cost_by_model": { "gemini-2.5-flash": 2.5, "gpt-5.4-nano": 1.25 },
+  "embedding_cost_by_model": {},
   "latency_ms_avg": 812.5,
   "latency_ms_p50": 740.0
 }
@@ -770,8 +778,10 @@ curl "http://localhost:8081/v1/usage/summary"
 
 `estimated_cost_usd == input_cost_usd + output_cost_usd`; `cost_by_provider` is the
 per-provider total, broken out by direction in `input_cost_by_provider` /
-`output_cost_by_provider`. Embedding spend is included in those totals and also
-reported separately as `embedding_cost_usd` / `embedding_cost_by_provider`.
+`output_cost_by_provider`; `cost_by_model` is the same total grouped by billable
+provider model. Embedding spend is included in those totals and also reported
+separately as `embedding_cost_usd`, `embedding_cost_by_provider`, and
+`embedding_cost_by_model`.
 `requests` counts all attempts and `failed_requests` the errored subset
 (tokens/cost come from successes only); latency stats are over records that report
 a latency (`null` if none).
