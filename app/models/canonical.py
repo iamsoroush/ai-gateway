@@ -61,6 +61,8 @@ class CanonicalUsage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    # Subset of prompt/input tokens served from provider prompt cache, when reported.
+    cached_input_tokens: int | None = None
     # Best-effort per-modality token breakdown (e.g. {"text": 10, "audio": 4}).
     # Providers populate what they report; anything unbroken counts as text.
     input_modality_tokens: dict[str, int] | None = None

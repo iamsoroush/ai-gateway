@@ -22,6 +22,7 @@ from app.models.usage import (
     TokenCostBreakdown,
     UsageAggregate,
     UsageBucket,
+    UsageModelAggregate,
     UsageStatsResponse,
     UsageSummaryResponse,
 )
@@ -45,26 +46,27 @@ def ensure_utc(dt: datetime) -> datetime:
 # --------------------------------------------------------------------------- #
 
 
-def tokens_from_usage(usage: CanonicalUsage | None) -> tuple[int, int, int, dict, dict]:
-    """Flatten a :class:`CanonicalUsage` into ``(in, out, total, in_mod, out_mod)``.
+def tokens_from_usage(usage: CanonicalUsage | None) -> tuple[int, int, int, int, dict, dict]:
+    """Flatten a :class:`CanonicalUsage` into token totals and modality maps.
 
     Anything not broken down by modality is attributed to ``text`` so the modality
     view is always populated.
     """
-    inp = out = total = 0
+    inp = out = total = cached_inp = 0
     in_mod: dict[str, int] = {}
     out_mod: dict[str, int] = {}
     if usage is not None:
         inp = usage.prompt_tokens or 0
         out = usage.completion_tokens or 0
         total = usage.total_tokens or (inp + out)
+        cached_inp = min(usage.cached_input_tokens or 0, inp)
         in_mod = dict(usage.input_modality_tokens or {})
         out_mod = dict(usage.output_modality_tokens or {})
     if not in_mod and inp:
         in_mod = {"text": inp}
     if not out_mod and out:
         out_mod = {"text": out}
-    return inp, out, total, in_mod, out_mod
+    return inp, out, total, cached_inp, in_mod, out_mod
 
 
 # --------------------------------------------------------------------------- #
@@ -99,12 +101,39 @@ def _modality_tokens(tokens_by_modality: dict[str, int], total_tokens: int) -> d
     return {"text": total_tokens} if total_tokens else {}
 
 
+def _cached_tokens_by_modality(
+    tokens_by_modality: dict[str, int], cached_input_tokens: int
+) -> dict[str, int]:
+    """Allocate provider-reported cached input tokens across known input modalities.
+
+    OpenAI reports cached prompt tokens as one total, not per modality. Most prompt
+    cache use is text, so text receives cached tokens first; any remainder is assigned
+    to the other modalities in stable alphabetical order.
+    """
+    remaining = max(cached_input_tokens, 0)
+    if not tokens_by_modality or not remaining:
+        return {}
+    out: dict[str, int] = {}
+    modalities = (["text"] if "text" in tokens_by_modality else []) + sorted(
+        m for m in tokens_by_modality if m != "text"
+    )
+    for modality in modalities:
+        if remaining <= 0:
+            break
+        cached = min(tokens_by_modality.get(modality, 0), remaining)
+        if cached:
+            out[modality] = cached
+            remaining -= cached
+    return out
+
+
 def estimate_cost_by_modality(
     rates: dict | None,
     input_modality_tokens: dict[str, int],
     output_modality_tokens: dict[str, int],
     input_tokens: int = 0,
     output_tokens: int = 0,
+    cached_input_tokens: int = 0,
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Estimate per-modality USD costs for input and output tokens."""
     in_tokens = _modality_tokens(input_modality_tokens, input_tokens)
@@ -112,9 +141,19 @@ def estimate_cost_by_modality(
     if not rates:
         return ({m: 0.0 for m in in_tokens}, {m: 0.0 for m in out_tokens})
 
-    inp, out = rates.get("input"), rates.get("output")
+    inp = rates.get("input")
+    cached_inp = rates.get("cached_input", inp)
+    out = rates.get("output")
+    cached_by_modality = _cached_tokens_by_modality(in_tokens, min(cached_input_tokens, input_tokens))
     in_costs = {
-        modality: tokens / 1_000_000 * _rate_for(inp, modality)
+        modality: (
+            max(tokens - cached_by_modality.get(modality, 0), 0)
+            / 1_000_000
+            * _rate_for(inp, modality)
+            + cached_by_modality.get(modality, 0)
+            / 1_000_000
+            * _rate_for(cached_inp, modality)
+        )
         for modality, tokens in in_tokens.items()
     }
     out_costs = {
@@ -130,6 +169,7 @@ def estimate_cost_breakdown(
     output_modality_tokens: dict[str, int],
     input_tokens: int = 0,
     output_tokens: int = 0,
+    cached_input_tokens: int = 0,
 ) -> tuple[float, float]:
     """Estimate ``(input_cost, output_cost)`` in USD from a model's ``rates``.
 
@@ -138,7 +178,12 @@ def estimate_cost_breakdown(
     plain input/output totals.
     """
     in_costs, out_costs = estimate_cost_by_modality(
-        rates, input_modality_tokens, output_modality_tokens, input_tokens, output_tokens
+        rates,
+        input_modality_tokens,
+        output_modality_tokens,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
     )
     return sum(in_costs.values()), sum(out_costs.values())
 
@@ -149,10 +194,16 @@ def estimate_cost(
     output_modality_tokens: dict[str, int],
     input_tokens: int = 0,
     output_tokens: int = 0,
+    cached_input_tokens: int = 0,
 ) -> float:
     """Total USD cost — the sum of the input- and output-token spend."""
     in_cost, out_cost = estimate_cost_breakdown(
-        rates, input_modality_tokens, output_modality_tokens, input_tokens, output_tokens
+        rates,
+        input_modality_tokens,
+        output_modality_tokens,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
     )
     return in_cost + out_cost
 
@@ -188,9 +239,11 @@ class _Acc:
         self.requests = 0
         self.failed_requests = 0
         self.input_tokens = 0
+        self.cached_input_tokens = 0
         self.output_tokens = 0
         self.total_tokens = 0
         self.input_by_modality: dict[str, int] = {}
+        self.cached_input_by_modality: dict[str, int] = {}
         self.output_by_modality: dict[str, int] = {}
         self.input_cost_by_modality: dict[str, float] = {}
         self.output_cost_by_modality: dict[str, float] = {}
@@ -210,12 +263,20 @@ class _Acc:
         if rec.latency_ms is not None:
             self.latencies.append(rec.latency_ms)
         self.input_tokens += rec.input_tokens
+        self.cached_input_tokens += min(rec.cached_input_tokens, rec.input_tokens)
         self.output_tokens += rec.output_tokens
         self.total_tokens += rec.total_tokens
         input_tokens_by_modality = _modality_tokens(rec.input_modality_tokens, rec.input_tokens)
         output_tokens_by_modality = _modality_tokens(rec.output_modality_tokens, rec.output_tokens)
         for modality, tokens in input_tokens_by_modality.items():
             self.input_by_modality[modality] = self.input_by_modality.get(modality, 0) + tokens
+        cached_input_by_modality = _cached_tokens_by_modality(
+            input_tokens_by_modality, min(rec.cached_input_tokens, rec.input_tokens)
+        )
+        for modality, tokens in cached_input_by_modality.items():
+            self.cached_input_by_modality[modality] = (
+                self.cached_input_by_modality.get(modality, 0) + tokens
+            )
         for modality, tokens in output_tokens_by_modality.items():
             self.output_by_modality[modality] = self.output_by_modality.get(modality, 0) + tokens
         in_costs, out_costs = estimate_cost_by_modality(
@@ -224,6 +285,7 @@ class _Acc:
             output_tokens_by_modality,
             rec.input_tokens,
             rec.output_tokens,
+            rec.cached_input_tokens,
         )
         in_cost = sum(in_costs.values())
         out_cost = sum(out_costs.values())
@@ -243,48 +305,64 @@ class _Acc:
     @staticmethod
     def _token_cost_breakdown(
         total_tokens: int,
+        cached_tokens: int,
         total_cost: float,
         tokens_by_modality: dict[str, int],
+        cached_by_modality: dict[str, int],
         cost_by_modality: dict[str, float],
     ) -> dict[str, TokenCostBreakdown]:
         out = {
             "total": TokenCostBreakdown(
                 tokens=total_tokens,
+                cached_tokens=cached_tokens,
                 total_cost=round(total_cost, _COST_DP),
             )
         }
         for modality in sorted(tokens_by_modality):
             out[modality] = TokenCostBreakdown(
                 tokens=tokens_by_modality[modality],
+                cached_tokens=cached_by_modality.get(modality, 0),
                 total_cost=round(cost_by_modality.get(modality, 0.0), _COST_DP),
             )
         return out
 
-    def to_aggregate(self) -> UsageAggregate:
+    def _base_aggregate_kwargs(self) -> dict:
         avg, p50 = _latency_stats(self.latencies)
-        return UsageAggregate(
+        return dict(
             requests=self.requests,
             failed_requests=self.failed_requests,
             input_tokens=self._token_cost_breakdown(
                 self.input_tokens,
+                min(self.cached_input_tokens, self.input_tokens),
                 self.input_cost,
                 self.input_by_modality,
+                self.cached_input_by_modality,
                 self.input_cost_by_modality,
             ),
             output_tokens=self._token_cost_breakdown(
                 self.output_tokens,
+                0,
                 self.output_cost,
                 self.output_by_modality,
+                {},
                 self.output_cost_by_modality,
             ),
             total_tokens=self.total_tokens,
             input_by_modality=dict(self.input_by_modality),
             output_by_modality=dict(self.output_by_modality),
             estimated_cost_usd=round(self.cost, _COST_DP),
-            embedding_cost_usd=round(self.embedding_cost, _COST_DP),
             latency_ms_avg=avg,
             latency_ms_p50=p50,
         )
+
+    def to_aggregate(self) -> UsageAggregate:
+        return UsageAggregate(
+            **self._base_aggregate_kwargs(),
+            embedding_cost_usd=round(self.embedding_cost, _COST_DP),
+        )
+
+    def to_model_aggregate(self) -> UsageModelAggregate:
+        return UsageModelAggregate(**self._base_aggregate_kwargs())
 
 
 def _accumulate(
@@ -340,7 +418,7 @@ def aggregate(
                     start=bucket_start,
                     totals=b_totals.to_aggregate(),
                     by_provider={p: acc.to_aggregate() for p, acc in b_by_provider.items()},
-                    by_model={m: acc.to_aggregate() for m, acc in b_by_model.items()},
+                    by_model={m: acc.to_model_aggregate() for m, acc in b_by_model.items()},
                 )
             )
 
@@ -350,7 +428,7 @@ def aggregate(
         interval=interval,
         totals=totals.to_aggregate(),
         by_provider={p: acc.to_aggregate() for p, acc in by_provider.items()},
-        by_model={m: acc.to_aggregate() for m, acc in by_model.items()},
+        by_model={m: acc.to_model_aggregate() for m, acc in by_model.items()},
         buckets=buckets,
     )
 

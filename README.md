@@ -726,13 +726,13 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
     "requests": 2,
     "failed_requests": 0,
     "input_tokens": {
-      "total": { "tokens": 2000000, "total_cost": 0.5 },
-      "text": { "tokens": 1800000, "total_cost": 0.44 },
-      "image": { "tokens": 200000, "total_cost": 0.06 }
+      "total": { "tokens": 2000000, "cached_tokens": 0, "total_cost": 0.5 },
+      "text": { "tokens": 1800000, "cached_tokens": 0, "total_cost": 0.44 },
+      "image": { "tokens": 200000, "cached_tokens": 0, "total_cost": 0.06 }
     },
     "output_tokens": {
-      "total": { "tokens": 2000000, "total_cost": 3.75 },
-      "text": { "tokens": 2000000, "total_cost": 3.75 }
+      "total": { "tokens": 2000000, "cached_tokens": 0, "total_cost": 3.75 },
+      "text": { "tokens": 2000000, "cached_tokens": 0, "total_cost": 3.75 }
     },
     "total_tokens": 4000000,
     "input_by_modality": { "text": 1800000, "image": 200000 },
@@ -743,8 +743,8 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
     "latency_ms_p50": 740.0
   },
   "by_provider": {
-    "gemini": { "requests": 1, "input_tokens": { "total": { "tokens": 1000000, "total_cost": 0.3 }, "...": "..." }, "estimated_cost_usd": 2.80 },
-    "openai": { "requests": 1, "input_tokens": { "total": { "tokens": 1000000, "total_cost": 0.2 }, "...": "..." }, "estimated_cost_usd": 1.45 }
+    "gemini": { "requests": 1, "input_tokens": { "total": { "tokens": 1000000, "cached_tokens": 0, "total_cost": 0.3 }, "...": "..." }, "estimated_cost_usd": 2.80 },
+    "openai": { "requests": 1, "input_tokens": { "total": { "tokens": 1000000, "cached_tokens": 0, "total_cost": 0.2 }, "...": "..." }, "estimated_cost_usd": 1.45 }
   },
   "by_model": {
     "gemini-2.5-flash": { "requests": 1, "estimated_cost_usd": 2.80, "...": "..." },
@@ -760,8 +760,10 @@ the same `totals` + `by_provider` + `by_model` shape.
 In `/v1/usage`, each aggregate's `input_tokens` and `output_tokens` are
 directional token/cost breakdowns. They always include `total`, plus any
 reported modalities such as `text`, `image`, or `audio`; each bucket contains
-`tokens` and `total_cost`. The legacy `input_by_modality` /
-`output_by_modality` count-only maps remain for compact modality totals.
+`tokens`, `cached_tokens`, and `total_cost`. Cached tokens are a subset of input
+tokens and are priced with the model's `cached_input` rate when available. The
+legacy `input_by_modality` / `output_by_modality` count-only maps remain for
+compact modality totals.
 
 ### `GET /v1/usage/summary`
 
@@ -848,15 +850,15 @@ failed before model resolution — `model_alias` then holds the requested name).
 
 ### Pricing
 
-Rates are USD per 1,000,000 tokens, per provider model. Each side (`input`/`output`)
-is either a **flat number** (same rate for every modality) or a **per-modality map**
-with an optional `default` — so models that charge more for audio/image than text are
-priced correctly:
+Rates are USD per 1,000,000 tokens, per provider model. Each side
+(`input`/`cached_input`/`output`) is either a **flat number** (same rate for every
+modality) or a **per-modality map** with an optional `default` — so models that
+charge more for audio/image than text are priced correctly:
 
 ```python
 # app/config.py — the static / fallback table (USD per 1M tokens)
 PRICING = {
-    "gpt-5-nano":       {"input": 0.05, "output": 0.40},          # flat
+    "gpt-5-nano":       {"input": 0.05, "cached_input": 0.005, "output": 0.40},  # flat
     "gemini-2.5-flash": {                                         # per-modality (audio > text)
         "input":  {"text": 0.30, "audio": 1.00, "default": 0.30},
         "output": 2.50,
@@ -865,7 +867,8 @@ PRICING = {
 ```
 
 Cost is computed **at query time** and is **modality-aware**: each modality bucket of a
-record is priced at its own rate. Tokens for an unpriced model contribute `0`.
+record is priced at its own rate. Cached input tokens use `cached_input` when present
+and fall back to the normal input rate otherwise. Tokens for an unpriced model contribute `0`.
 
 **Prices can change, so they're loadable from a hosted JSON you control** instead of only
 the static table. Set `PRICING_SOURCE_URL` (and optionally `PRICING_REFRESH_SECONDS`,

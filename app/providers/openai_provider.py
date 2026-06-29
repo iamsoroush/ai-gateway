@@ -39,7 +39,9 @@ def _to_canonical_usage(usage) -> CanonicalUsage | None:
         return None
     prompt = usage.prompt_tokens or 0
     completion = usage.completion_tokens or 0
-    audio_in = getattr(getattr(usage, "prompt_tokens_details", None), "audio_tokens", 0) or 0
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    audio_in = getattr(prompt_details, "audio_tokens", 0) or 0
+    cached_in = getattr(prompt_details, "cached_tokens", 0) or 0
     audio_out = getattr(getattr(usage, "completion_tokens_details", None), "audio_tokens", 0) or 0
 
     input_modality = {}
@@ -57,6 +59,7 @@ def _to_canonical_usage(usage) -> CanonicalUsage | None:
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=usage.total_tokens,
+        cached_input_tokens=min(cached_in, prompt),
         input_modality_tokens=input_modality or None,
         output_modality_tokens=output_modality or None,
     )

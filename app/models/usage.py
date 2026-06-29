@@ -43,6 +43,8 @@ class RequestRecord(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    # Subset of input tokens served from provider prompt cache, when reported.
+    cached_input_tokens: int = 0
     # Per-modality token counts (e.g. {"text": 10, "image": 258, "audio": 4}).
     input_modality_tokens: dict[str, int] = Field(default_factory=dict)
     output_modality_tokens: dict[str, int] = Field(default_factory=dict)
@@ -60,11 +62,12 @@ class TokenCostBreakdown(BaseModel):
     """Token count plus computed cost for one token direction/modality bucket."""
 
     tokens: int = 0
+    cached_tokens: int = 0
     total_cost: float = 0.0
 
 
-class UsageAggregate(BaseModel):
-    """Summed usage for a scope (overall, a provider, or a time bucket)."""
+class UsageBaseAggregate(BaseModel):
+    """Summed usage for a scope."""
 
     requests: int = 0
     # Subset of ``requests`` that errored (success count = requests - failed_requests).
@@ -75,11 +78,26 @@ class UsageAggregate(BaseModel):
     input_by_modality: dict[str, int] = Field(default_factory=dict)
     output_by_modality: dict[str, int] = Field(default_factory=dict)
     estimated_cost_usd: float = 0.0
-    # Subset of estimated_cost_usd attributable to embedding models.
-    embedding_cost_usd: float = 0.0
     # Latency over records that report one (None when no records carry latency).
     latency_ms_avg: float | None = None
     latency_ms_p50: float | None = None
+
+
+class UsageAggregate(UsageBaseAggregate):
+    """Summed usage for totals/provider scopes."""
+
+    # Subset of estimated_cost_usd attributable to embedding models.
+    embedding_cost_usd: float = 0.0
+
+
+class UsageModelAggregate(UsageBaseAggregate):
+    """Summed usage for a model scope.
+
+    Embedding cost is intentionally omitted here because model scope already names
+    the model; embedding-specific spend remains available in summary maps.
+    """
+
+    pass
 
 
 class UsageBucket(BaseModel):
@@ -88,7 +106,7 @@ class UsageBucket(BaseModel):
     start: datetime
     totals: UsageAggregate
     by_provider: dict[str, UsageAggregate]
-    by_model: dict[str, UsageAggregate] = Field(default_factory=dict)
+    by_model: dict[str, UsageModelAggregate] = Field(default_factory=dict)
 
 
 class UsageStatsResponse(BaseModel):
@@ -99,7 +117,7 @@ class UsageStatsResponse(BaseModel):
     interval: str | None = None
     totals: UsageAggregate
     by_provider: dict[str, UsageAggregate]
-    by_model: dict[str, UsageAggregate] = Field(default_factory=dict)
+    by_model: dict[str, UsageModelAggregate] = Field(default_factory=dict)
     buckets: list[UsageBucket] | None = None
 
 

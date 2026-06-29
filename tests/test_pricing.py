@@ -3,6 +3,8 @@
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from app.main import app
 from app.models.usage import RequestRecord
 from app.services.pricing import PricingService, parse_pricing
@@ -41,6 +43,28 @@ def test_estimate_cost_per_modality_rates():
     )
     # input: 1M*0.10 + 1M*0.50 = 0.60 ; output: 1M*0.20 = 0.20
     assert cost == 0.80
+
+
+def test_estimate_cost_discounts_cached_input_tokens():
+    cost = estimate_cost(
+        {"input": 0.20, "cached_input": 0.02, "output": 1.00},
+        {"text": 1_000_000},
+        {},
+        input_tokens=1_000_000,
+        cached_input_tokens=250_000,
+    )
+    assert cost == pytest.approx(0.155)
+
+
+def test_estimate_cost_cached_input_falls_back_to_input_rate():
+    cost = estimate_cost(
+        {"input": 0.20, "output": 1.00},
+        {"text": 1_000_000},
+        {},
+        input_tokens=1_000_000,
+        cached_input_tokens=250_000,
+    )
+    assert cost == 0.20
 
 
 def test_estimate_cost_unknown_modality_uses_default():

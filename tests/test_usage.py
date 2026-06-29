@@ -137,7 +137,7 @@ def test_embedding_costs_are_included_and_broken_out():
     assert stats.by_provider["openai"].estimated_cost_usd == 1.47
     assert stats.by_provider["openai"].embedding_cost_usd == 0.02
     assert stats.by_model["text-embedding-3-small"].estimated_cost_usd == 0.02
-    assert stats.by_model["text-embedding-3-small"].embedding_cost_usd == 0.02
+    assert not hasattr(stats.by_model["text-embedding-3-small"], "embedding_cost_usd")
 
     summary = summarize(records, start=start, end=end)
     assert summary.estimated_cost_usd == 4.27
@@ -164,6 +164,39 @@ def test_embedding_costs_are_included_and_broken_out():
         "text-embedding-3-small": 0.0,
     }
     assert summary.embedding_cost_by_model == {"text-embedding-3-small": 0.02}
+
+
+def test_cached_input_tokens_are_discounted_and_reported():
+    start, end = BASE - timedelta(days=1), BASE + timedelta(days=1)
+    records = [
+        RequestRecord(
+            timestamp=BASE,
+            provider="openai",
+            provider_model="gpt-5.4-nano",
+            model_alias="report-large",
+            input_tokens=1_000_000,
+            cached_input_tokens=400_000,
+            output_tokens=0,
+            total_tokens=1_000_000,
+            input_modality_tokens={"text": 1_000_000},
+            output_modality_tokens={},
+        )
+    ]
+
+    stats = aggregate(records, start=start, end=end)
+
+    # gpt-5.4-nano input is $0.20/M and cached input is $0.02/M:
+    # 600k uncached + 400k cached = $0.12 + $0.008.
+    assert stats.totals.estimated_cost_usd == 0.128
+    assert stats.totals.input_tokens["total"].tokens == 1_000_000
+    assert stats.totals.input_tokens["total"].cached_tokens == 400_000
+    assert stats.totals.input_tokens["total"].total_cost == 0.128
+    assert stats.totals.input_tokens["text"].cached_tokens == 400_000
+    assert stats.by_model["gpt-5.4-nano"].input_tokens["total"].cached_tokens == 400_000
+
+    summary = summarize(records, start=start, end=end)
+    assert summary.input_cost_usd == 0.128
+    assert summary.output_cost_usd == 0.0
 
 
 # --------------------------------------------------------------------------- #

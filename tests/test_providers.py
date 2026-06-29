@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app.config import Settings
@@ -8,6 +10,7 @@ from app.models.errors import (
 )
 from app.models.canonical import CanonicalContentPart, CanonicalLLMRequest, CanonicalMessage
 from app.providers.openai_provider import OpenAIProvider
+from app.providers.openai_provider import _to_canonical_usage as openai_usage
 from app.providers.gemini_provider import GeminiProvider
 from app.services.normalizer import validate_content_support
 from app.services.router import ProviderRouter
@@ -187,6 +190,21 @@ def test_openai_embedding_kwargs_forward_user():
     )
     kwargs = OpenAIProvider()._build_embedding_kwargs(req)
     assert kwargs["user"] == "user_123"
+
+
+def test_openai_usage_maps_cached_prompt_tokens():
+    usage = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+        prompt_tokens_details=SimpleNamespace(audio_tokens=10, cached_tokens=40),
+        completion_tokens_details=SimpleNamespace(audio_tokens=0),
+    )
+
+    canonical = openai_usage(usage)
+
+    assert canonical.cached_input_tokens == 40
+    assert canonical.input_modality_tokens == {"text": 90, "audio": 10}
 
 
 def test_openai_messages_preserve_tool_call_loop():

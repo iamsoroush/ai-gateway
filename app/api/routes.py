@@ -128,10 +128,10 @@ class _ReqCtx:
 def _success_record(
     ctx: _ReqCtx, canonical: CanonicalLLMRequest, usage: CanonicalUsage | None, latency_ms: float
 ) -> RequestRecord:
-    inp, out, total, in_mod, out_mod = tokens_from_usage(usage)
+    inp, out, total, cached_inp, in_mod, out_mod = tokens_from_usage(usage)
     rates = ctx.pricing.get(canonical.provider_model)
     # None (not 0.0) when the model is unpriced, so the snapshot reads as "unknown".
-    cost = round(estimate_cost(rates, in_mod, out_mod, inp, out), _COST_DP) if rates else None
+    cost = round(estimate_cost(rates, in_mod, out_mod, inp, out, cached_inp), _COST_DP) if rates else None
     return RequestRecord(
         timestamp=now_utc(),
         request_id=ctx.request_id,
@@ -144,6 +144,7 @@ def _success_record(
         input_tokens=inp,
         output_tokens=out,
         total_tokens=total,
+        cached_input_tokens=cached_inp,
         input_modality_tokens=in_mod,
         output_modality_tokens=out_mod,
         has_image=ctx.has_image,

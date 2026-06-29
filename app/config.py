@@ -129,9 +129,9 @@ def resolve_model(model: str) -> dict[str, str] | None:
 # models (Gemini `*-pro`: <=200k vs >200k tokens) use the smaller-context tier —
 # the schema has no token-threshold dimension.
 #
-# Each side ("input"/"output") is either a flat number (same rate for every
-# modality) OR a per-modality map with an optional "default" (used for any modality
-# not listed — e.g. image/video fall back to the text rate), e.g.:
+# Each side ("input"/"cached_input"/"output") is either a flat number (same rate for
+# every modality) OR a per-modality map with an optional "default" (used for any
+# modality not listed — e.g. image/video fall back to the text rate), e.g.:
 #   "gemini-2.5-flash": {
 #       "input":  {"text": 0.30, "audio": 1.00, "default": 0.30},
 #       "output": 2.50,
@@ -140,15 +140,15 @@ def resolve_model(model: str) -> dict[str, str] | None:
 PRICING: dict[str, dict] = {
     # OpenAI — GPT-5 family (text/image; flat per-side rates). Current lineup is the
     # 5.4 and 5.5 series; gpt-5 base is the original Aug-2025 release.
-    "gpt-5": {"input": 1.25, "output": 10.00},
-    "gpt-5-mini": {"input": 0.25, "output": 2.00},
-    "gpt-5-nano": {"input": 0.05, "output": 0.40},
-    "gpt-5.4": {"input": 2.50, "output": 15.00},
-    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
-    "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
-    "gpt-5.4-pro": {"input": 30.00, "output": 180.00},
-    "gpt-5.5": {"input": 5.00, "output": 30.00},  # latest flagship (Apr 2026)
-    "gpt-5.5-pro": {"input": 30.00, "output": 180.00},
+    "gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00},
+    "gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00},
+    "gpt-5-nano": {"input": 0.05, "cached_input": 0.005, "output": 0.40},
+    "gpt-5.4": {"input": 2.50, "cached_input": 0.25, "output": 15.00},
+    "gpt-5.4-mini": {"input": 0.75, "cached_input": 0.075, "output": 4.50},
+    "gpt-5.4-nano": {"input": 0.20, "cached_input": 0.02, "output": 1.25},
+    "gpt-5.4-pro": {"input": 30.00, "cached_input": 3.00, "output": 180.00},
+    "gpt-5.5": {"input": 5.00, "cached_input": 0.50, "output": 30.00},  # latest flagship (Apr 2026)
+    "gpt-5.5-pro": {"input": 30.00, "cached_input": 3.00, "output": 180.00},
     # OpenAI embeddings — input-only pricing.
     "text-embedding-3-small": {"input": 0.02, "output": 0.00},
     "text-embedding-3-large": {"input": 0.13, "output": 0.00},

@@ -84,7 +84,7 @@ class InMemoryRequestStore:
 _COLUMNS = (
     "ts, request_id, status, provider, provider_model, model_alias, stream, "
     "error_type, error_code, http_status, latency_ms, "
-    "input_tokens, output_tokens, total_tokens, "
+    "input_tokens, cached_input_tokens, output_tokens, total_tokens, "
     "input_modality_tokens, output_modality_tokens, "
     "has_image, has_audio, cost_usd, client_ip, user_agent"
 )
@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS requests (
     http_status INTEGER,
     latency_ms DOUBLE PRECISION,
     input_tokens INTEGER NOT NULL,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL,
     total_tokens INTEGER NOT NULL,
     input_modality_tokens JSONB NOT NULL,
@@ -150,6 +151,10 @@ class PostgresRequestStore:
     def _ensure_schema(self) -> None:
         with self._pool.connection() as conn:
             conn.execute(_SCHEMA)
+            conn.execute(
+                "ALTER TABLE requests "
+                "ADD COLUMN IF NOT EXISTS cached_input_tokens INTEGER NOT NULL DEFAULT 0"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests (ts)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON requests (status)")
 
@@ -170,6 +175,7 @@ class PostgresRequestStore:
                     record.http_status,
                     record.latency_ms,
                     record.input_tokens,
+                    record.cached_input_tokens,
                     record.output_tokens,
                     record.total_tokens,
                     self._Json(record.input_modality_tokens),
@@ -227,6 +233,7 @@ class PostgresRequestStore:
             http_status,
             latency_ms,
             inp,
+            cached_inp,
             out,
             total,
             in_mod,
@@ -251,6 +258,7 @@ class PostgresRequestStore:
             http_status=http_status,
             latency_ms=latency_ms,
             input_tokens=inp,
+            cached_input_tokens=cached_inp,
             output_tokens=out,
             total_tokens=total,
             input_modality_tokens=in_mod,

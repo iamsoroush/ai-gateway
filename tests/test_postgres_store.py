@@ -52,6 +52,7 @@ def _record(provider="gemini", at=BASE, **kw) -> RequestRecord:
         stream=True,
         latency_ms=12.5,
         input_tokens=100,
+        cached_input_tokens=25,
         output_tokens=50,
         total_tokens=150,
         input_modality_tokens={"text": 60, "audio": 40},
@@ -76,6 +77,7 @@ def test_record_and_query_roundtrip(pg_store):
     assert r.stream is True
     assert r.has_audio is True
     assert r.input_modality_tokens == {"text": 60, "audio": 40}
+    assert r.cached_input_tokens == 25
     assert r.latency_ms == 12.5
     assert r.cost_usd == pytest.approx(0.000123)
     assert r.client_ip == "10.0.0.7"
@@ -132,6 +134,7 @@ def test_null_provider_failure_row(pg_store):
             error_code="model_not_found",
             http_status=404,
             input_tokens=0,
+            cached_input_tokens=0,
             output_tokens=0,
             total_tokens=0,
             input_modality_tokens={},
