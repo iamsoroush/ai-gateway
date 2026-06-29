@@ -164,7 +164,11 @@ class GeminiProvider(BaseLLMProvider):
         mime_type, json_schema = _structured_output(request.response_format)
         config_kwargs: dict[str, Any] = {
             "temperature": request.temperature,
-            "max_output_tokens": request.max_tokens,
+            "max_output_tokens": (
+                request.max_completion_tokens
+                if request.max_completion_tokens is not None
+                else request.max_tokens
+            ),
             "system_instruction": "\n".join(system_instructions) or None,
         }
         if mime_type:

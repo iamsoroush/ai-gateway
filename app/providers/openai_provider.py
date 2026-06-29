@@ -59,20 +59,33 @@ def _to_canonical_usage(usage) -> CanonicalUsage | None:
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=usage.total_tokens,
+        raw_usage=_dump_openai_obj(usage, exclude_none=True),
         cached_input_tokens=min(cached_in, prompt),
         input_modality_tokens=input_modality or None,
         output_modality_tokens=output_modality or None,
     )
 
 
-def _dump_openai_obj(obj: Any) -> dict | None:
+def _dump_openai_obj(obj: Any, *, exclude_none: bool = True) -> Any:
     if obj is None:
         return None
     if hasattr(obj, "model_dump"):
-        return obj.model_dump(exclude_none=True)
+        return obj.model_dump(mode="json", exclude_none=exclude_none)
     if isinstance(obj, dict):
-        return {k: v for k, v in obj.items() if v is not None}
-    return None
+        return {
+            k: _dump_openai_obj(v, exclude_none=exclude_none)
+            for k, v in obj.items()
+            if not exclude_none or v is not None
+        }
+    if isinstance(obj, list):
+        return [_dump_openai_obj(v, exclude_none=exclude_none) for v in obj]
+    if hasattr(obj, "__dict__"):
+        return {
+            k: _dump_openai_obj(v, exclude_none=exclude_none)
+            for k, v in vars(obj).items()
+            if not exclude_none or v is not None
+        }
+    return obj
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -163,7 +176,9 @@ class OpenAIProvider(BaseLLMProvider):
         kwargs: dict[str, Any] = {"model": request.provider_model, "messages": messages}
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
-        if request.max_tokens is not None:
+        if request.max_completion_tokens is not None:
+            kwargs["max_completion_tokens"] = request.max_completion_tokens
+        elif request.max_tokens is not None:
             kwargs["max_tokens"] = request.max_tokens
         if request.response_format is not None:
             kwargs["response_format"] = request.response_format

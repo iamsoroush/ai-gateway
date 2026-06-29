@@ -79,6 +79,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     temperature: float | None = None
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None
     response_format: dict | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
@@ -111,9 +112,13 @@ class Choice(BaseModel):
 
 
 class Usage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    prompt_tokens_details: dict[str, Any] | None = None
+    completion_tokens_details: dict[str, Any] | None = None
 
 
 class ChatCompletionResponse(BaseModel):

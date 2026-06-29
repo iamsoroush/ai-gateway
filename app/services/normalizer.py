@@ -128,6 +128,7 @@ def normalize_request(req: ChatCompletionRequest) -> CanonicalLLMRequest:
         messages=messages,
         temperature=req.temperature,
         max_tokens=req.max_tokens,
+        max_completion_tokens=req.max_completion_tokens,
         stream=req.stream,
         response_format=req.response_format,
         tools=req.tools,

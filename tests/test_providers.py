@@ -146,6 +146,21 @@ def test_openai_build_kwargs_forwards_reasoning_effort():
     assert "reasoning_effort" not in OpenAIProvider()._build_kwargs(plain, messages=[])
 
 
+def test_openai_build_kwargs_prefers_max_completion_tokens():
+    req = _text_request(
+        "openai",
+        "gpt-5.4-nano",
+        max_tokens=100,
+        max_completion_tokens=20,
+    )
+    kwargs = OpenAIProvider()._build_kwargs(req, messages=[])
+    assert kwargs["max_completion_tokens"] == 20
+    assert "max_tokens" not in kwargs
+
+    legacy = _text_request("openai", "gpt-5.4-nano", max_tokens=100)
+    assert OpenAIProvider()._build_kwargs(legacy, messages=[])["max_tokens"] == 100
+
+
 def test_openai_build_kwargs_forwards_tools():
     tool = {
         "type": "function",
@@ -205,6 +220,7 @@ def test_openai_usage_maps_cached_prompt_tokens():
 
     assert canonical.cached_input_tokens == 40
     assert canonical.input_modality_tokens == {"text": 90, "audio": 10}
+    assert canonical.raw_usage["prompt_tokens_details"]["cached_tokens"] == 40
 
 
 def test_openai_messages_preserve_tool_call_loop():

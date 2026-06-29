@@ -72,6 +72,12 @@ def test_normalize_passes_reasoning_effort_through():
     assert normalize_request(_request()).reasoning_effort is None
 
 
+def test_normalize_passes_max_completion_tokens_through():
+    canonical = normalize_request(_request(max_completion_tokens=20))
+    assert canonical.max_completion_tokens == 20
+    assert canonical.max_tokens is None
+
+
 def test_normalize_unknown_model_raises():
     # Not a registered alias and not a recognizable provider model name.
     with pytest.raises(UnknownModelError):

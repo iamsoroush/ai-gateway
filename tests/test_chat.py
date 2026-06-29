@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import app
+from app.models.canonical import CanonicalLLMResponse, CanonicalUsage
 from tests.conftest import FakeProvider, FakeRouter
 
 
@@ -26,6 +27,60 @@ def test_non_streaming_completion(fake_client):
     assert body["choices"][0]["message"]["content"] == "hello report"
     assert body["choices"][0]["finish_reason"] == "stop"
     assert body["usage"]["total_tokens"] == 5
+
+
+def test_usage_details_and_cache_headers_are_forwarded():
+    class CachedProvider(FakeProvider):
+        async def complete(self, request):
+            return CanonicalLLMResponse(
+                content="cached hello",
+                finish_reason="stop",
+                provider_model=request.provider_model,
+                usage=CanonicalUsage(
+                    prompt_tokens=1600,
+                    completion_tokens=20,
+                    total_tokens=1620,
+                    cached_input_tokens=1536,
+                    raw_usage={
+                        "prompt_tokens": 1600,
+                        "completion_tokens": 20,
+                        "total_tokens": 1620,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 1536,
+                            "audio_tokens": 0,
+                        },
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 12,
+                            "audio_tokens": 0,
+                        },
+                    },
+                ),
+            )
+
+    original = app.state.provider_router
+    app.state.provider_router = FakeRouter(CachedProvider())
+    try:
+        with TestClient(app) as test_client:
+            resp = test_client.post(
+                "/v1/chat/completions",
+                headers={"x-request-id": "req-cache"},
+                json={
+                    "model": "gpt-5.4-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_completion_tokens": 20,
+                },
+            )
+    finally:
+        app.state.provider_router = original
+
+    assert resp.status_code == 200
+    usage = resp.json()["usage"]
+    assert usage["prompt_tokens_details"]["cached_tokens"] == 1536
+    assert usage["completion_tokens_details"]["reasoning_tokens"] == 12
+    assert resp.headers["x-cache"] == "hit"
+    assert resp.headers["x-cached-tokens"] == "1536"
+    assert float(resp.headers["x-upstream-latency-ms"]) >= 0
+    assert resp.headers["x-request-id"] == "req-cache"
 
 
 def test_streaming_completion(fake_client):
@@ -167,6 +222,34 @@ def test_reasoning_effort_forwarded_to_provider(fake_client):
 
     assert resp.status_code == 200
     assert captured["reasoning_effort"] == "high"
+
+
+def test_max_completion_tokens_forwarded_to_provider(fake_client):
+    captured = {}
+
+    class CapturingProvider(FakeProvider):
+        async def complete(self, request):
+            captured["max_completion_tokens"] = request.max_completion_tokens
+            captured["max_tokens"] = request.max_tokens
+            return await super().complete(request)
+
+    original = app.state.provider_router
+    app.state.provider_router = FakeRouter(CapturingProvider())
+    try:
+        with TestClient(app) as test_client:
+            resp = test_client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "report-fast",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_completion_tokens": 20,
+                },
+            )
+    finally:
+        app.state.provider_router = original
+
+    assert resp.status_code == 200
+    assert captured == {"max_completion_tokens": 20, "max_tokens": None}
 
 
 def test_openai_tools_forwarded_and_tool_call_response(fake_client):

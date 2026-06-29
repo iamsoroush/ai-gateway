@@ -224,6 +224,21 @@ on first connect. Caller IP / user-agent are operational metadata (see D6); in a
 context an IP can be quasi-identifying, so treat the table as PHI-adjacent and never add
 request content to it.
 
+### D19. Forward raw OpenAI usage details and expose cache headers
+**Decision.** Provider adapters may attach an OpenAI-compatible raw usage payload to
+`CanonicalUsage`; the chat route forwards that payload to callers when present instead of
+rebuilding the public `usage` object from aggregate counts. Non-streaming chat responses also
+emit `x-cache`, `x-cached-tokens`, `x-upstream-latency-ms`, and `x-request-id`.
+**Why.** OpenAI reports operationally important details under nested usage fields
+(`prompt_tokens_details.cached_tokens`, `completion_tokens_details.reasoning_tokens`). Dropping
+those fields hides prompt-cache engagement and reasoning-token cost from OpenAI SDK callers.
+The headers provide the minimum tracing/cache correlation path for backends that attach gateway
+metadata to their own spans.
+**Consequences.** The raw usage payload is response-only; request records still store PHI-safe
+token metadata derived from canonical counts. Do not inject or reorder messages for tracing or
+request IDs: prompt-cache effectiveness depends on callers sending an identical long prefix.
+Full gateway-owned OTLP spans remain a future upgrade; the header contract is the V1 path.
+
 ---
 
 ## Anticipated (not yet built)

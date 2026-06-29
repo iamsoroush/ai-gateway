@@ -50,6 +50,7 @@ the gateway, not a live proxy of either provider's account-level model-list API.
   "messages": [ /* >= 1 */ ],
   "temperature": 0.2,            // optional
   "max_tokens": 2000,            // optional
+  "max_completion_tokens": 2000, // optional, preferred by newer OpenAI clients
   "response_format": { },        // optional, structured output — see below
   "reasoning_effort": "medium",  // optional, "minimal"|"low"|"medium"|"high" — see below
   "metadata": { }                // optional, ignored by providers
@@ -123,9 +124,22 @@ regardless of provider; the gateway translates per provider:
   "created": 1234567890,
   "model": "report-fast",
   "choices": [{"index": 0, "message": {"role": "assistant", "content": "..."}, "finish_reason": "stop"}],
-  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "prompt_tokens_details": {"cached_tokens": 0},
+    "completion_tokens_details": {"reasoning_tokens": 0}
+  }
 }
 ```
+For OpenAI-backed calls, the gateway forwards the upstream OpenAI-compatible
+`usage` object instead of reconstructing it, so provider details such as
+`prompt_tokens_details.cached_tokens` and
+`completion_tokens_details.reasoning_tokens` are preserved when reported.
+Non-streaming chat responses also include observability headers:
+`x-cache` (`hit` when cached tokens are reported, else `miss`),
+`x-cached-tokens`, `x-upstream-latency-ms`, and `x-request-id`.
 
 ### Streaming response (`stream: true`)
 OpenAI-style SSE `chat.completion.chunk` events, ending with `data: [DONE]`:

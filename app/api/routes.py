@@ -15,8 +15,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.config import MODEL_CATALOG, MODEL_REGISTRY
@@ -199,14 +200,34 @@ async def list_models() -> ModelList:
     return ModelList(data=aliases + provider_models)
 
 
-def _build_usage(usage) -> Usage | None:
+def _build_usage(usage) -> Usage | dict[str, Any] | None:
     if usage is None:
         return None
+    if usage.raw_usage is not None:
+        return usage.raw_usage
     return Usage(
         prompt_tokens=usage.prompt_tokens or 0,
         completion_tokens=usage.completion_tokens or 0,
         total_tokens=usage.total_tokens or 0,
     )
+
+
+def _cached_tokens(usage: CanonicalUsage | None) -> int:
+    return max(usage.cached_input_tokens or 0, 0) if usage is not None else 0
+
+
+def _set_completion_headers(
+    response: Response,
+    *,
+    request_id: str,
+    usage: CanonicalUsage | None,
+    upstream_latency_ms: float,
+) -> None:
+    cached_tokens = _cached_tokens(usage)
+    response.headers["x-cache"] = "hit" if cached_tokens > 0 else "miss"
+    response.headers["x-cached-tokens"] = str(cached_tokens)
+    response.headers["x-upstream-latency-ms"] = str(upstream_latency_ms)
+    response.headers["x-request-id"] = request_id
 
 
 def _build_response(
@@ -245,7 +266,7 @@ def _embedding_usage(usage) -> CanonicalUsage | None:
 
 
 @router.post("/v1/chat/completions")
-async def chat_completions(body: ChatCompletionRequest, request: Request):
+async def chat_completions(body: ChatCompletionRequest, request: Request, response: Response):
     request_id = request.headers.get("x-request-id") or new_request_id()
     client_ip, user_agent = _client_info(request)
     has_image, has_audio = _content_flags(body)
@@ -311,9 +332,17 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
             return StreamingResponse(event_source(), media_type="text/event-stream")
 
+        upstream_started = time.perf_counter()
         result = await provider.complete(canonical)
+        upstream_latency = _elapsed_ms(upstream_started)
         latency = _elapsed_ms(ctx.started)
         _record_request_safely(request, _success_record(ctx, canonical, result.usage, latency))
+        _set_completion_headers(
+            response,
+            request_id=request_id,
+            usage=result.usage,
+            upstream_latency_ms=upstream_latency,
+        )
         logger.info(
             "chat.completions.done",
             extra={"context": {**log_ctx, "latency_ms": latency}},

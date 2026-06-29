@@ -67,7 +67,7 @@ OpenAI-compatible response / SSE stream to caller
 4. **Capability check** — `validate_content_support` rejects content types the
    provider/model can't handle (`UnsupportedContentError` 400). Never silently dropped.
 5. **Delegate**:
-   - Non-streaming: `await provider.complete(canonical)` → `CanonicalLLMResponse`; route maps it to the OpenAI response.
+   - Non-streaming: `await provider.complete(canonical)` → `CanonicalLLMResponse`; route maps it to the OpenAI response, preserving any provider-supplied OpenAI-compatible raw `usage` payload and adding cache/correlation headers.
    - Streaming: `provider.ensure_ready()` first (so a missing key is a normal HTTP error, not a mid-stream event), then stream via `sse_stream`.
 6. **Record the request** — best-effort, wrapped so it can never break the response. The
    whole pipeline (steps 2–5) runs inside a try/except so **every routed request is

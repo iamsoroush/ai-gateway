@@ -43,6 +43,7 @@ class CanonicalLLMRequest(BaseModel):
     messages: list[CanonicalMessage]
     temperature: float | None = None
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None
     stream: bool = False
     response_format: dict | None = None
     tools: list[dict[str, Any]] | None = None
@@ -61,6 +62,9 @@ class CanonicalUsage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    # Provider-supplied OpenAI-compatible usage payload, forwarded to callers
+    # when present so details such as cached/reasoning tokens are not lost.
+    raw_usage: dict[str, Any] | None = None
     # Subset of prompt/input tokens served from provider prompt cache, when reported.
     cached_input_tokens: int | None = None
     # Best-effort per-modality token breakdown (e.g. {"text": 10, "audio": 4}).
