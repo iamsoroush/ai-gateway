@@ -15,7 +15,7 @@ from app.models.canonical import (
     CanonicalLLMRequest,
     CanonicalMessage,
 )
-from app.models.errors import UnknownModelError, UnsupportedContentError
+from app.models.errors import UnknownModelError, UnsupportedContentError, UnsupportedFeatureError
 from app.models.openai_contract import ChatCompletionRequest, ChatMessage
 
 # Canonical content types that count as "audio" for default-model selection.
@@ -42,7 +42,20 @@ def _select_model(req: ChatCompletionRequest) -> str:
     return settings.default_audio_model if _request_has_audio(req) else settings.default_model
 
 
+def _uses_tooling(req: ChatCompletionRequest) -> bool:
+    if req.tools:
+        return True
+    if req.tool_choice not in (None, "none"):
+        return True
+    for message in req.messages:
+        if message.role == "tool" or message.tool_calls or message.tool_call_id or message.function_call:
+            return True
+    return False
+
+
 def _normalize_content(message: ChatMessage) -> list[CanonicalContentPart]:
+    if message.content is None:
+        return []
     if isinstance(message.content, str):
         return [CanonicalContentPart(type="text", text=message.content)]
 
@@ -82,8 +95,22 @@ def normalize_request(req: ChatCompletionRequest) -> CanonicalLLMRequest:
             f"whose provider can be inferred (e.g. 'gpt-...', 'gemini-...')."
         )
 
+    if model_cfg["provider"] != "openai" and _uses_tooling(req):
+        raise UnsupportedFeatureError(
+            "Tool calling is currently supported only for OpenAI models. "
+            "Use an OpenAI model such as 'gpt-5.4-nano', or omit tools/tool messages."
+        )
+
     messages = [
-        CanonicalMessage(role=m.role, content=_normalize_content(m)) for m in req.messages
+        CanonicalMessage(
+            role=m.role,
+            content=_normalize_content(m),
+            tool_calls=m.tool_calls,
+            tool_call_id=m.tool_call_id,
+            function_call=m.function_call,
+            name=m.name,
+        )
+        for m in req.messages
     ]
     return CanonicalLLMRequest(
         model_alias=model,
@@ -94,6 +121,9 @@ def normalize_request(req: ChatCompletionRequest) -> CanonicalLLMRequest:
         max_tokens=req.max_tokens,
         stream=req.stream,
         response_format=req.response_format,
+        tools=req.tools,
+        tool_choice=req.tool_choice,
+        parallel_tool_calls=req.parallel_tool_calls,
         reasoning_effort=req.reasoning_effort,
         metadata=req.metadata,
     )

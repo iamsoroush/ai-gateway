@@ -217,7 +217,11 @@ def _build_response(
         choices=[
             Choice(
                 index=0,
-                message=ResponseMessage(content=canonical_response.content),
+                message=ResponseMessage(
+                    content=canonical_response.content,
+                    tool_calls=canonical_response.tool_calls,
+                    function_call=canonical_response.function_call,
+                ),
                 finish_reason=canonical_response.finish_reason or "stop",
             )
         ],

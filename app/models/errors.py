@@ -66,6 +66,14 @@ class UnsupportedContentError(GatewayError):
     code = "unsupported_content_type"
 
 
+class UnsupportedFeatureError(GatewayError):
+    """The selected provider/model cannot handle a requested API feature."""
+
+    status_code = 400
+    error_type = "invalid_request_error"
+    code = "unsupported_feature"
+
+
 class MissingAPIKeyError(GatewayError):
     """The provider's API key is not configured."""
 

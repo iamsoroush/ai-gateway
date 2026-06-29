@@ -49,6 +49,9 @@ The FastAPI route never contains provider-specific logic — it depends only on 
 - **Reasoning effort**: set OpenAI's `reasoning_effort` (`minimal`/`low`/`medium`/`high`)
   on either provider — forwarded to OpenAI, translated to Gemini's `thinking_level`
   (3+) or `thinking_budget` (2.5)
+- **Tool/function calling**: OpenAI-compatible `tools`, `tool_choice`, and
+  `parallel_tool_calls` for OpenAI models; Gemini tool calls return a clear
+  `unsupported_feature` error until mapped intentionally
 - Flexible model selection: registered **aliases**, **any raw model name**
   (provider auto-detected), or **omit `model`** to auto-pick by content
 - **Per-request records**: one row per request — success *and* failure — with status,
@@ -578,6 +581,59 @@ resp = client.chat.completions.create(
     response_format={"type": "json_object"},
 )
 print(resp.choices[0].message.content)  # a JSON string
+```
+
+</details>
+
+### 5. OpenAI tools / function calling
+
+Tool calling works with OpenAI models. The gateway forwards `tools`,
+`tool_choice`, `parallel_tool_calls`, assistant `tool_calls`, and follow-up
+`role: "tool"` messages to OpenAI and returns OpenAI-shaped `tool_calls` in the
+assistant message. Gemini models currently reject tool requests with
+`unsupported_feature`.
+
+<details>
+<summary><b>Python</b></summary>
+
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get weather for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
+resp = client.chat.completions.create(
+    model="gpt-5.4-nano",  # OpenAI model
+    messages=[{"role": "user", "content": "What's the weather in Tehran?"}],
+    tools=tools,
+    tool_choice="auto",
+)
+
+tool_call = resp.choices[0].message.tool_calls[0]
+print(tool_call.function.name, tool_call.function.arguments)
+
+# Run your local function, then send the tool result back:
+final = client.chat.completions.create(
+    model="gpt-5.4-nano",
+    messages=[
+        {"role": "user", "content": "What's the weather in Tehran?"},
+        resp.choices[0].message.model_dump(exclude_none=True),
+        {
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": '{"temperature_c": 21}',
+        },
+    ],
+)
+print(final.choices[0].message.content)
 ```
 
 </details>

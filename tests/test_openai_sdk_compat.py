@@ -30,6 +30,30 @@ def test_non_streaming_response_matches_openai_type(fake_client):
     assert parsed.choices[0].message.role == "assistant"
 
 
+def test_tool_call_response_matches_openai_type(fake_client):
+    resp = fake_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-5.4-nano",
+            "messages": [{"role": "user", "content": "weather"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+
+    parsed = ChatCompletion.model_validate(resp.json())
+    assert parsed.choices[0].finish_reason == "tool_calls"
+    assert parsed.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
 def test_streaming_chunks_match_openai_type(fake_client):
     with fake_client.stream(
         "POST",

@@ -38,6 +38,23 @@ class FakeProvider(BaseLLMProvider):
         return {"text", "image_url", "audio_url", "input_audio"}
 
     async def complete(self, request: CanonicalLLMRequest) -> CanonicalLLMResponse:
+        if request.tools:
+            return CanonicalLLMResponse(
+                content=None,
+                finish_reason="tool_calls",
+                provider_model=request.provider_model,
+                usage=CanonicalUsage(prompt_tokens=7, completion_tokens=3, total_tokens=10),
+                tool_calls=[
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city":"Tehran"}',
+                        },
+                    }
+                ],
+            )
         return CanonicalLLMResponse(
             content="hello report",
             finish_reason="stop",

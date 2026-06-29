@@ -62,6 +62,16 @@ def _to_canonical_usage(usage) -> CanonicalUsage | None:
     )
 
 
+def _dump_openai_obj(obj: Any) -> dict | None:
+    if obj is None:
+        return None
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(exclude_none=True)
+    if isinstance(obj, dict):
+        return {k: v for k, v in obj.items() if v is not None}
+    return None
+
+
 class OpenAIProvider(BaseLLMProvider):
     name = "openai"
 
@@ -92,10 +102,21 @@ class OpenAIProvider(BaseLLMProvider):
     async def _to_openai_messages(self, messages: list[CanonicalMessage]) -> list[dict]:
         out: list[dict] = []
         for msg in messages:
+            item: dict[str, Any] = {"role": msg.role}
+            if msg.name is not None:
+                item["name"] = msg.name
+            if msg.tool_call_id is not None:
+                item["tool_call_id"] = msg.tool_call_id
+            if msg.tool_calls is not None:
+                item["tool_calls"] = msg.tool_calls
+            if msg.function_call is not None:
+                item["function_call"] = msg.function_call
+
             # Collapse pure-text messages to the simple string form.
             if all(p.type == "text" for p in msg.content):
                 text = "".join(p.text or "" for p in msg.content)
-                out.append({"role": msg.role, "content": text})
+                item["content"] = text if text or not msg.tool_calls else None
+                out.append(item)
                 continue
 
             parts: list[dict] = []
@@ -124,7 +145,8 @@ class OpenAIProvider(BaseLLMProvider):
                             },
                         }
                     )
-            out.append({"role": msg.role, "content": parts})
+            item["content"] = parts
+            out.append(item)
         return out
 
     @staticmethod
@@ -142,6 +164,12 @@ class OpenAIProvider(BaseLLMProvider):
             kwargs["max_tokens"] = request.max_tokens
         if request.response_format is not None:
             kwargs["response_format"] = request.response_format
+        if request.tools is not None:
+            kwargs["tools"] = request.tools
+        if request.tool_choice is not None:
+            kwargs["tool_choice"] = request.tool_choice
+        if request.parallel_tool_calls is not None:
+            kwargs["parallel_tool_calls"] = request.parallel_tool_calls
         # OpenAI accepts reasoning_effort natively on reasoning-capable models.
         if request.reasoning_effort is not None:
             kwargs["reasoning_effort"] = request.reasoning_effort
@@ -166,11 +194,18 @@ class OpenAIProvider(BaseLLMProvider):
             raise ProviderRequestError(f"OpenAI request failed: {exc}") from exc
 
         choice = resp.choices[0]
+        message = choice.message
         return CanonicalLLMResponse(
-            content=choice.message.content or "",
+            content=message.content,
             finish_reason=choice.finish_reason or "stop",
             provider_model=request.provider_model,
             usage=_to_canonical_usage(getattr(resp, "usage", None)),
+            tool_calls=(
+                [_dump_openai_obj(tool_call) for tool_call in message.tool_calls]
+                if getattr(message, "tool_calls", None)
+                else None
+            ),
+            function_call=_dump_openai_obj(getattr(message, "function_call", None)),
         )
 
     async def stream_complete(self, request: CanonicalLLMRequest) -> AsyncIterator[StreamEvent]:
@@ -188,9 +223,16 @@ class OpenAIProvider(BaseLLMProvider):
         try:
             async for chunk in stream:
                 if chunk.choices:
-                    delta = chunk.choices[0].delta
-                    if delta and delta.content:
-                        yield StreamEvent(delta=delta.content)
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    payload = _dump_openai_obj(delta)
+                    if payload:
+                        if delta and getattr(delta, "content", None):
+                            yield StreamEvent(delta=delta.content)
+                        else:
+                            yield StreamEvent(delta_payload=payload)
+                    if getattr(choice, "finish_reason", None):
+                        yield StreamEvent(finish_reason=choice.finish_reason)
                 if getattr(chunk, "usage", None):
                     yield StreamEvent(usage=_to_canonical_usage(chunk.usage))
         except Exception as exc:

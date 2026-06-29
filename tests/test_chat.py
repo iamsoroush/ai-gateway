@@ -169,6 +169,117 @@ def test_reasoning_effort_forwarded_to_provider(fake_client):
     assert captured["reasoning_effort"] == "high"
 
 
+def test_openai_tools_forwarded_and_tool_call_response(fake_client):
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }
+
+    resp = fake_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-5.4-nano",
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "tools": [tool],
+            "tool_choice": "auto",
+            "parallel_tool_calls": False,
+        },
+    )
+
+    assert resp.status_code == 200
+    choice = resp.json()["choices"][0]
+    assert choice["finish_reason"] == "tool_calls"
+    assert choice["message"]["content"] is None
+    assert choice["message"]["tool_calls"] == [
+        {
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Tehran"}'},
+        }
+    ]
+
+
+def test_openai_tool_result_messages_are_accepted():
+    captured = {}
+
+    class CapturingProvider(FakeProvider):
+        async def complete(self, request):
+            captured["roles"] = [m.role for m in request.messages]
+            captured["tool_call_id"] = request.messages[-1].tool_call_id
+            captured["assistant_tool_calls"] = request.messages[1].tool_calls
+            return await super().complete(request)
+
+    original = app.state.provider_router
+    app.state.provider_router = FakeRouter(CapturingProvider())
+    try:
+        with TestClient(app) as test_client:
+            resp = test_client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gpt-5.4-nano",
+                    "messages": [
+                        {"role": "user", "content": "weather"},
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_weather",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city":"Tehran"}',
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call_weather",
+                            "content": '{"temperature_c": 21}',
+                        },
+                    ],
+                },
+            )
+    finally:
+        app.state.provider_router = original
+
+    assert resp.status_code == 200
+    assert captured["roles"] == ["user", "assistant", "tool"]
+    assert captured["tool_call_id"] == "call_weather"
+    assert captured["assistant_tool_calls"][0]["id"] == "call_weather"
+
+
+def test_tools_are_rejected_for_gemini(client):
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "report-fast",
+            "messages": [{"role": "user", "content": "weather"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "unsupported_feature"
+
+
 def test_invalid_reasoning_effort_returns_422(fake_client):
     resp = fake_client.post(
         "/v1/chat/completions",

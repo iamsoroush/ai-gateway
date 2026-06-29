@@ -8,7 +8,7 @@ back out to the OpenAI contract. Nothing here is provider specific.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,8 +25,12 @@ class CanonicalContentPart(BaseModel):
 
 
 class CanonicalMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: list[CanonicalContentPart]
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    function_call: dict[str, Any] | None = None
+    name: str | None = None
 
 
 class CanonicalLLMRequest(BaseModel):
@@ -41,6 +45,9 @@ class CanonicalLLMRequest(BaseModel):
     max_tokens: int | None = None
     stream: bool = False
     response_format: dict | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+    parallel_tool_calls: bool | None = None
     # Reasoning effort: "minimal" | "low" | "medium" | "high". Providers translate
     # this to their own thinking controls (OpenAI reasoning_effort, Gemini thinking).
     reasoning_effort: str | None = None
@@ -58,10 +65,12 @@ class CanonicalUsage(BaseModel):
 
 
 class CanonicalLLMResponse(BaseModel):
-    content: str
+    content: str | None = None
     finish_reason: str | None = "stop"
     provider_model: str
     usage: CanonicalUsage | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    function_call: dict[str, Any] | None = None
 
 
 class StreamEvent(BaseModel):
@@ -73,4 +82,7 @@ class StreamEvent(BaseModel):
     """
 
     delta: str = ""
+    # Raw OpenAI-style delta payload, used for streamed tool_call chunks.
+    delta_payload: dict[str, Any] | None = None
+    finish_reason: str | None = None
     usage: CanonicalUsage | None = None

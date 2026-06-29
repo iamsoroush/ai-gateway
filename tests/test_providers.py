@@ -143,6 +143,66 @@ def test_openai_build_kwargs_forwards_reasoning_effort():
     assert "reasoning_effort" not in OpenAIProvider()._build_kwargs(plain, messages=[])
 
 
+def test_openai_build_kwargs_forwards_tools():
+    tool = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+    }
+    req = _text_request(
+        "openai",
+        "gpt-5.4-nano",
+        tools=[tool],
+        tool_choice="auto",
+        parallel_tool_calls=False,
+    )
+
+    kwargs = OpenAIProvider()._build_kwargs(req, messages=[])
+    assert kwargs["tools"] == [tool]
+    assert kwargs["tool_choice"] == "auto"
+    assert kwargs["parallel_tool_calls"] is False
+
+
+def test_openai_messages_preserve_tool_call_loop():
+    import asyncio
+
+    request = CanonicalLLMRequest(
+        model_alias="gpt-5.4-nano",
+        provider="openai",
+        provider_model="gpt-5.4-nano",
+        messages=[
+            CanonicalMessage(
+                role="assistant",
+                content=[],
+                tool_calls=[
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city":"Tehran"}',
+                        },
+                    }
+                ],
+            ),
+            CanonicalMessage(
+                role="tool",
+                content=[CanonicalContentPart(type="text", text='{"temperature_c":21}')],
+                tool_call_id="call_weather",
+            ),
+        ],
+    )
+
+    messages = asyncio.run(OpenAIProvider()._to_openai_messages(request.messages))
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["content"] is None
+    assert messages[0]["tool_calls"][0]["id"] == "call_weather"
+    assert messages[1] == {
+        "role": "tool",
+        "tool_call_id": "call_weather",
+        "content": '{"temperature_c":21}',
+    }
+
+
 def test_gemini_thinking_spec_maps_effort_by_model_family():
     from app.providers.gemini_provider import _thinking_spec
 

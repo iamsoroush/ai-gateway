@@ -27,6 +27,7 @@ class UsageCollector:
     def __init__(self) -> None:
         self.usage = None
         self.error: Exception | None = None
+        self.finish_reason: str | None = None
 
 
 def _chunk(completion_id: str, model: str, created: int, delta: dict, finish_reason=None) -> str:
@@ -54,9 +55,14 @@ async def sse_stream(
         async for event in provider.stream_complete(request):
             if event.delta:
                 yield _chunk(completion_id, model, created, {"content": event.delta})
+            if event.delta_payload:
+                yield _chunk(completion_id, model, created, event.delta_payload)
+            if event.finish_reason is not None and collector is not None:
+                collector.finish_reason = event.finish_reason
             if event.usage is not None and collector is not None:
                 collector.usage = event.usage
-        yield _chunk(completion_id, model, created, {}, finish_reason="stop")
+        finish_reason = collector.finish_reason if collector is not None else None
+        yield _chunk(completion_id, model, created, {}, finish_reason=finish_reason or "stop")
     except GatewayError as exc:
         if collector is not None:
             collector.error = exc

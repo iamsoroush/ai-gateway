@@ -7,7 +7,7 @@ ignored rather than rejected, to stay forward-compatible with OpenAI clients.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,9 +58,15 @@ ContentPart = Annotated[
 
 
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool"]
     # Either a plain string (the common case) or a list of typed content parts.
-    content: Union[str, list[ContentPart]]
+    content: Union[str, list[ContentPart], None] = None
+    # OpenAI tool-calling loop fields. Kept as dicts so the gateway can pass
+    # through the current OpenAI schema without re-modeling every nested variant.
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    function_call: dict[str, Any] | None = None
+    name: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -74,6 +80,9 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     response_format: dict | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+    parallel_tool_calls: bool | None = None
     # Reasoning/"thinking" effort (OpenAI-style). Forwarded natively to OpenAI and
     # translated to Gemini's thinking controls — see services.normalizer / providers.
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
@@ -87,7 +96,9 @@ class ChatCompletionRequest(BaseModel):
 
 class ResponseMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
-    content: str
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    function_call: dict[str, Any] | None = None
 
 
 class Choice(BaseModel):
