@@ -94,6 +94,41 @@ def test_summarize_overall_and_cost_by_provider():
     assert summary.input_cost_usd + summary.output_cost_usd == summary.estimated_cost_usd
     assert summary.input_cost_by_provider == {"gemini": 0.30, "openai": 0.20}
     assert summary.output_cost_by_provider == {"gemini": 2.50, "openai": 1.25}
+    assert summary.embedding_cost_usd == 0.0
+    assert summary.embedding_cost_by_provider == {}
+
+
+def test_embedding_costs_are_included_and_broken_out():
+    start, end = BASE - timedelta(days=1), BASE + timedelta(days=3)
+    records = _records() + [
+        RequestRecord(
+            timestamp=BASE + timedelta(days=2),
+            provider="openai",
+            provider_model="text-embedding-3-small",
+            model_alias="text-embedding-3-small",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            total_tokens=1_000_000,
+            input_modality_tokens={"text": 1_000_000},
+            output_modality_tokens={},
+        )
+    ]
+
+    stats = aggregate(records, start=start, end=end)
+    assert stats.totals.estimated_cost_usd == 4.27
+    assert stats.totals.embedding_cost_usd == 0.02
+    assert stats.by_provider["openai"].estimated_cost_usd == 1.47
+    assert stats.by_provider["openai"].embedding_cost_usd == 0.02
+
+    summary = summarize(records, start=start, end=end)
+    assert summary.estimated_cost_usd == 4.27
+    assert summary.input_cost_usd == 0.52
+    assert summary.output_cost_usd == 3.75
+    assert summary.cost_by_provider == {"gemini": 2.80, "openai": 1.47}
+    assert summary.input_cost_by_provider == {"gemini": 0.30, "openai": 0.22}
+    assert summary.output_cost_by_provider == {"gemini": 2.50, "openai": 1.25}
+    assert summary.embedding_cost_usd == 0.02
+    assert summary.embedding_cost_by_provider == {"openai": 0.02}
 
 
 # --------------------------------------------------------------------------- #
@@ -134,7 +169,7 @@ def test_chat_completion_is_recorded(usage_client):
     # Input/output split is present, per-provider, and reconciles with the total.
     assert summary["input_cost_usd"] >= 0
     assert summary["output_cost_usd"] >= 0
-    assert round(summary["input_cost_usd"] + summary["output_cost_usd"], 6) == summary["estimated_cost_usd"]
+    assert round(summary["input_cost_usd"] + summary["output_cost_usd"], 8) == summary["estimated_cost_usd"]
     assert "gemini" in summary["input_cost_by_provider"]
     assert "gemini" in summary["output_cost_by_provider"]
 

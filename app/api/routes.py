@@ -60,7 +60,8 @@ router = APIRouter()
 
 # Default usage/requests window when the caller does not specify a range.
 _DEFAULT_USAGE_WINDOW = timedelta(days=30)
-_COST_DP = 6  # round the per-request cost snapshot to micro-dollars
+# Enough precision for very cheap embedding requests (e.g. text-embedding-3-small).
+_COST_DP = 8
 
 
 def _provider_router(request: Request) -> ProviderRouter:

@@ -721,6 +721,7 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
     "input_by_modality": { "text": 1800000, "image": 200000 },
     "output_by_modality": { "text": 2000000 },
     "estimated_cost_usd": 4.25,
+    "embedding_cost_usd": 0.0,
     "latency_ms_avg": 812.5,
     "latency_ms_p50": 740.0
   },
@@ -757,9 +758,11 @@ curl "http://localhost:8081/v1/usage/summary"
   "estimated_cost_usd": 4.25,
   "input_cost_usd": 0.5,
   "output_cost_usd": 3.75,
+  "embedding_cost_usd": 0.0,
   "cost_by_provider": { "gemini": 2.8, "openai": 1.45 },
   "input_cost_by_provider": { "gemini": 0.3, "openai": 0.2 },
   "output_cost_by_provider": { "gemini": 2.5, "openai": 1.25 },
+  "embedding_cost_by_provider": {},
   "latency_ms_avg": 812.5,
   "latency_ms_p50": 740.0
 }
@@ -767,9 +770,11 @@ curl "http://localhost:8081/v1/usage/summary"
 
 `estimated_cost_usd == input_cost_usd + output_cost_usd`; `cost_by_provider` is the
 per-provider total, broken out by direction in `input_cost_by_provider` /
-`output_cost_by_provider`. `requests` counts all attempts and `failed_requests` the
-errored subset (tokens/cost come from successes only); latency stats are over records
-that report a latency (`null` if none).
+`output_cost_by_provider`. Embedding spend is included in those totals and also
+reported separately as `embedding_cost_usd` / `embedding_cost_by_provider`.
+`requests` counts all attempts and `failed_requests` the errored subset
+(tokens/cost come from successes only); latency stats are over records that report
+a latency (`null` if none).
 
 ### `GET /v1/requests`
 

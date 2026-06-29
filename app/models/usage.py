@@ -68,6 +68,8 @@ class UsageAggregate(BaseModel):
     input_by_modality: dict[str, int] = Field(default_factory=dict)
     output_by_modality: dict[str, int] = Field(default_factory=dict)
     estimated_cost_usd: float = 0.0
+    # Subset of estimated_cost_usd attributable to embedding models.
+    embedding_cost_usd: float = 0.0
     # Latency over records that report one (None when no records carry latency).
     latency_ms_avg: float | None = None
     latency_ms_p50: float | None = None
@@ -108,9 +110,12 @@ class UsageSummaryResponse(BaseModel):
     estimated_cost_usd: float
     input_cost_usd: float = 0.0
     output_cost_usd: float = 0.0
+    # Standalone embedding spend, also included in estimated/input/provider totals.
+    embedding_cost_usd: float = 0.0
     cost_by_provider: dict[str, float]
     input_cost_by_provider: dict[str, float] = Field(default_factory=dict)
     output_cost_by_provider: dict[str, float] = Field(default_factory=dict)
+    embedding_cost_by_provider: dict[str, float] = Field(default_factory=dict)
     # Latency over records that report one (None when no records carry latency).
     latency_ms_avg: float | None = None
     latency_ms_p50: float | None = None

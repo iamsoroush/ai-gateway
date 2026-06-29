@@ -25,7 +25,9 @@ from app.models.usage import (
     UsageSummaryResponse,
 )
 
-_COST_DP = 6  # round money to micro-dollars
+# Keep enough precision for cheap embedding calls: 1 token on text-embedding-3-small
+# costs $0.00000002, which disappears at 6 decimal places.
+_COST_DP = 8
 
 
 def now_utc() -> datetime:
@@ -133,6 +135,11 @@ def estimate_cost(
     return in_cost + out_cost
 
 
+def _is_embedding_record(rec: RequestRecord) -> bool:
+    model = (rec.provider_model or rec.model_alias or "").lower()
+    return model.startswith("text-embedding-")
+
+
 # --------------------------------------------------------------------------- #
 # Aggregation                                                                 #
 # --------------------------------------------------------------------------- #
@@ -165,6 +172,7 @@ class _Acc:
         self.output_by_modality: dict[str, int] = {}
         self.input_cost = 0.0
         self.output_cost = 0.0
+        self.embedding_cost = 0.0
         self.latencies: list[float] = []
 
     @property
@@ -193,6 +201,8 @@ class _Acc:
         )
         self.input_cost += in_cost
         self.output_cost += out_cost
+        if _is_embedding_record(rec):
+            self.embedding_cost += in_cost + out_cost
 
     def to_aggregate(self) -> UsageAggregate:
         avg, p50 = _latency_stats(self.latencies)
@@ -205,6 +215,7 @@ class _Acc:
             input_by_modality=dict(self.input_by_modality),
             output_by_modality=dict(self.output_by_modality),
             estimated_cost_usd=round(self.cost, _COST_DP),
+            embedding_cost_usd=round(self.embedding_cost, _COST_DP),
             latency_ms_avg=avg,
             latency_ms_p50=p50,
         )
@@ -294,9 +305,15 @@ def summarize(
         estimated_cost_usd=round(totals.cost, _COST_DP),
         input_cost_usd=round(totals.input_cost, _COST_DP),
         output_cost_usd=round(totals.output_cost, _COST_DP),
+        embedding_cost_usd=round(totals.embedding_cost, _COST_DP),
         cost_by_provider={p: round(acc.cost, _COST_DP) for p, acc in by_provider.items()},
         input_cost_by_provider={p: round(acc.input_cost, _COST_DP) for p, acc in by_provider.items()},
         output_cost_by_provider={p: round(acc.output_cost, _COST_DP) for p, acc in by_provider.items()},
+        embedding_cost_by_provider={
+            p: round(acc.embedding_cost, _COST_DP)
+            for p, acc in by_provider.items()
+            if acc.embedding_cost
+        },
         latency_ms_avg=latency_avg,
         latency_ms_p50=latency_p50,
     )
