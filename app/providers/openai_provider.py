@@ -170,6 +170,12 @@ class OpenAIProvider(BaseLLMProvider):
             kwargs["tool_choice"] = request.tool_choice
         if request.parallel_tool_calls is not None:
             kwargs["parallel_tool_calls"] = request.parallel_tool_calls
+        if request.prompt_cache_key is not None:
+            kwargs["prompt_cache_key"] = request.prompt_cache_key
+        if request.prompt_cache_retention is not None:
+            kwargs["prompt_cache_retention"] = request.prompt_cache_retention
+        if request.user is not None:
+            kwargs["user"] = request.user
         # OpenAI accepts reasoning_effort natively on reasoning-capable models.
         if request.reasoning_effort is not None:
             kwargs["reasoning_effort"] = request.reasoning_effort

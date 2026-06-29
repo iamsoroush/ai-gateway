@@ -83,6 +83,9 @@ class ChatCompletionRequest(BaseModel):
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_retention: Literal["in_memory", "24h"] | None = None
+    user: str | None = None
     # Reasoning/"thinking" effort (OpenAI-style). Forwarded natively to OpenAI and
     # translated to Gemini's thinking controls — see services.normalizer / providers.
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None

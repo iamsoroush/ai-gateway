@@ -53,6 +53,10 @@ def _uses_tooling(req: ChatCompletionRequest) -> bool:
     return False
 
 
+def _uses_openai_only_request_metadata(req: ChatCompletionRequest) -> bool:
+    return bool(req.prompt_cache_key or req.prompt_cache_retention or req.user)
+
+
 def _normalize_content(message: ChatMessage) -> list[CanonicalContentPart]:
     if message.content is None:
         return []
@@ -100,6 +104,11 @@ def normalize_request(req: ChatCompletionRequest) -> CanonicalLLMRequest:
             "Tool calling is currently supported only for OpenAI models. "
             "Use an OpenAI model such as 'gpt-5.4-nano', or omit tools/tool messages."
         )
+    if model_cfg["provider"] != "openai" and _uses_openai_only_request_metadata(req):
+        raise UnsupportedFeatureError(
+            "prompt_cache_key, prompt_cache_retention, and user are currently "
+            "supported only for OpenAI chat models."
+        )
 
     messages = [
         CanonicalMessage(
@@ -124,6 +133,9 @@ def normalize_request(req: ChatCompletionRequest) -> CanonicalLLMRequest:
         tools=req.tools,
         tool_choice=req.tool_choice,
         parallel_tool_calls=req.parallel_tool_calls,
+        prompt_cache_key=req.prompt_cache_key,
+        prompt_cache_retention=req.prompt_cache_retention,
+        user=req.user,
         reasoning_effort=req.reasoning_effort,
         metadata=req.metadata,
     )

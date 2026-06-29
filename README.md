@@ -237,6 +237,16 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)         # typed attribute access
 print(resp.usage.total_tokens)
 
+# OpenAI prompt-cache routing / user metadata pass-through.
+# These are OpenAI-only for chat requests; Gemini returns unsupported_feature.
+resp = client.chat.completions.create(
+    model="gpt-5.4-nano",
+    messages=[{"role": "user", "content": "Use my cached report template."}],
+    prompt_cache_key="tenant-a-report-template",
+    prompt_cache_retention="24h",
+    user="user_123",
+)
+
 # streaming -> iterator of typed ChatCompletionChunk
 for chunk in client.chat.completions.create(
     model="report-fast",

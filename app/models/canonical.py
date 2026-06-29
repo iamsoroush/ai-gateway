@@ -48,6 +48,9 @@ class CanonicalLLMRequest(BaseModel):
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_retention: str | None = None
+    user: str | None = None
     # Reasoning effort: "minimal" | "low" | "medium" | "high". Providers translate
     # this to their own thinking controls (OpenAI reasoning_effort, Gemini thinking).
     reasoning_effort: str | None = None

@@ -280,6 +280,55 @@ def test_tools_are_rejected_for_gemini(client):
     assert resp.json()["error"]["code"] == "unsupported_feature"
 
 
+def test_prompt_cache_key_and_user_forwarded_to_openai_provider():
+    captured = {}
+
+    class CapturingProvider(FakeProvider):
+        async def complete(self, request):
+            captured["prompt_cache_key"] = request.prompt_cache_key
+            captured["prompt_cache_retention"] = request.prompt_cache_retention
+            captured["user"] = request.user
+            return await super().complete(request)
+
+    original = app.state.provider_router
+    app.state.provider_router = FakeRouter(CapturingProvider())
+    try:
+        with TestClient(app) as test_client:
+            resp = test_client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": "gpt-5.4-nano",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "prompt_cache_key": "tenant-a-report-template",
+                    "prompt_cache_retention": "24h",
+                    "user": "user_123",
+                },
+            )
+    finally:
+        app.state.provider_router = original
+
+    assert resp.status_code == 200
+    assert captured == {
+        "prompt_cache_key": "tenant-a-report-template",
+        "prompt_cache_retention": "24h",
+        "user": "user_123",
+    }
+
+
+def test_prompt_cache_key_is_rejected_for_gemini(client):
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "report-fast",
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt_cache_key": "tenant-a-report-template",
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "unsupported_feature"
+
+
 def test_invalid_reasoning_effort_returns_422(fake_client):
     resp = fake_client.post(
         "/v1/chat/completions",

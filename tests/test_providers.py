@@ -162,6 +162,33 @@ def test_openai_build_kwargs_forwards_tools():
     assert kwargs["parallel_tool_calls"] is False
 
 
+def test_openai_build_kwargs_forwards_prompt_cache_and_user():
+    req = _text_request(
+        "openai",
+        "gpt-5.4-nano",
+        prompt_cache_key="tenant-a-report-template",
+        prompt_cache_retention="24h",
+        user="user_123",
+    )
+
+    kwargs = OpenAIProvider()._build_kwargs(req, messages=[])
+    assert kwargs["prompt_cache_key"] == "tenant-a-report-template"
+    assert kwargs["prompt_cache_retention"] == "24h"
+    assert kwargs["user"] == "user_123"
+
+
+def test_openai_embedding_kwargs_forward_user():
+    from app.models.openai_contract import EmbeddingRequest
+
+    req = EmbeddingRequest(
+        model="text-embedding-3-small",
+        input="hello",
+        user="user_123",
+    )
+    kwargs = OpenAIProvider()._build_embedding_kwargs(req)
+    assert kwargs["user"] == "user_123"
+
+
 def test_openai_messages_preserve_tool_call_loop():
     import asyncio
 
