@@ -42,8 +42,16 @@ def test_aggregate_totals_modality_and_cost():
     stats = aggregate(_records(), start=start, end=end)
 
     assert stats.totals.requests == 2
-    assert stats.totals.input_tokens == 2_000_000
-    assert stats.totals.output_tokens == 2_000_000
+    assert stats.totals.input_tokens["total"].tokens == 2_000_000
+    assert stats.totals.input_tokens["total"].total_cost == 0.50
+    assert stats.totals.input_tokens["text"].tokens == 1_800_000
+    assert stats.totals.input_tokens["text"].total_cost == 0.44
+    assert stats.totals.input_tokens["image"].tokens == 200_000
+    assert stats.totals.input_tokens["image"].total_cost == 0.06
+    assert stats.totals.output_tokens["total"].tokens == 2_000_000
+    assert stats.totals.output_tokens["total"].total_cost == 3.75
+    assert stats.totals.output_tokens["text"].tokens == 2_000_000
+    assert stats.totals.output_tokens["text"].total_cost == 3.75
     # modality sums across providers
     assert stats.totals.input_by_modality == {"text": 1_800_000, "image": 200_000}
     assert stats.totals.output_by_modality == {"text": 2_000_000}
@@ -51,6 +59,8 @@ def test_aggregate_totals_modality_and_cost():
     # cost: gemini 1M input @0.30 + 1M output @2.50 = 2.80 ; openai 1M*0.20 + 1M*1.25 = 1.45
     assert stats.by_provider["gemini"].estimated_cost_usd == 2.80
     assert stats.by_provider["openai"].estimated_cost_usd == 1.45
+    assert stats.by_provider["gemini"].input_tokens["total"].total_cost == 0.30
+    assert stats.by_provider["openai"].output_tokens["total"].total_cost == 1.25
     assert stats.by_model["gemini-2.5-flash"].estimated_cost_usd == 2.80
     assert stats.by_model["gpt-5.4-nano"].estimated_cost_usd == 1.45
     assert stats.totals.estimated_cost_usd == 4.25
@@ -246,6 +256,10 @@ def test_usage_endpoint_modality_and_provider_filter(usage_client):
 
     full = client.get("/v1/usage").json()
     assert full["totals"]["requests"] == 2
+    assert full["totals"]["input_tokens"]["total"]["tokens"] == 110
+    assert full["totals"]["input_tokens"]["text"]["tokens"] == 70
+    assert full["totals"]["input_tokens"]["audio"]["tokens"] == 40
+    assert full["totals"]["output_tokens"]["total"]["tokens"] == 55
     assert full["totals"]["input_by_modality"] == {"text": 70, "audio": 40}
     assert set(full["by_provider"]) == {"gemini", "openai"}
     assert set(full["by_model"]) == {"gemini-2.5-flash", "gpt-5.4-nano"}

@@ -19,6 +19,7 @@ from app.config import get_pricing
 from app.models.canonical import CanonicalUsage
 from app.models.usage import (
     RequestRecord,
+    TokenCostBreakdown,
     UsageAggregate,
     UsageBucket,
     UsageStatsResponse,
@@ -91,6 +92,38 @@ def _rate_for(side: object, modality: str) -> float:
     return 0.0
 
 
+def _modality_tokens(tokens_by_modality: dict[str, int], total_tokens: int) -> dict[str, int]:
+    """Return modality token buckets, falling back to text when only a total exists."""
+    if tokens_by_modality:
+        return dict(tokens_by_modality)
+    return {"text": total_tokens} if total_tokens else {}
+
+
+def estimate_cost_by_modality(
+    rates: dict | None,
+    input_modality_tokens: dict[str, int],
+    output_modality_tokens: dict[str, int],
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Estimate per-modality USD costs for input and output tokens."""
+    in_tokens = _modality_tokens(input_modality_tokens, input_tokens)
+    out_tokens = _modality_tokens(output_modality_tokens, output_tokens)
+    if not rates:
+        return ({m: 0.0 for m in in_tokens}, {m: 0.0 for m in out_tokens})
+
+    inp, out = rates.get("input"), rates.get("output")
+    in_costs = {
+        modality: tokens / 1_000_000 * _rate_for(inp, modality)
+        for modality, tokens in in_tokens.items()
+    }
+    out_costs = {
+        modality: tokens / 1_000_000 * _rate_for(out, modality)
+        for modality, tokens in out_tokens.items()
+    }
+    return in_costs, out_costs
+
+
 def estimate_cost_breakdown(
     rates: dict | None,
     input_modality_tokens: dict[str, int],
@@ -104,21 +137,10 @@ def estimate_cost_breakdown(
     ``default`` / text). If no modality breakdown is present, falls back to the
     plain input/output totals.
     """
-    if not rates:
-        return 0.0, 0.0
-    inp, out = rates.get("input"), rates.get("output")
-    in_cost = out_cost = 0.0
-    if input_modality_tokens:
-        for modality, tokens in input_modality_tokens.items():
-            in_cost += tokens / 1_000_000 * _rate_for(inp, modality)
-    else:
-        in_cost += input_tokens / 1_000_000 * _rate_for(inp, "text")
-    if output_modality_tokens:
-        for modality, tokens in output_modality_tokens.items():
-            out_cost += tokens / 1_000_000 * _rate_for(out, modality)
-    else:
-        out_cost += output_tokens / 1_000_000 * _rate_for(out, "text")
-    return in_cost, out_cost
+    in_costs, out_costs = estimate_cost_by_modality(
+        rates, input_modality_tokens, output_modality_tokens, input_tokens, output_tokens
+    )
+    return sum(in_costs.values()), sum(out_costs.values())
 
 
 def estimate_cost(
@@ -170,6 +192,8 @@ class _Acc:
         self.total_tokens = 0
         self.input_by_modality: dict[str, int] = {}
         self.output_by_modality: dict[str, int] = {}
+        self.input_cost_by_modality: dict[str, float] = {}
+        self.output_cost_by_modality: dict[str, float] = {}
         self.input_cost = 0.0
         self.output_cost = 0.0
         self.embedding_cost = 0.0
@@ -188,29 +212,71 @@ class _Acc:
         self.input_tokens += rec.input_tokens
         self.output_tokens += rec.output_tokens
         self.total_tokens += rec.total_tokens
-        for modality, tokens in rec.input_modality_tokens.items():
+        input_tokens_by_modality = _modality_tokens(rec.input_modality_tokens, rec.input_tokens)
+        output_tokens_by_modality = _modality_tokens(rec.output_modality_tokens, rec.output_tokens)
+        for modality, tokens in input_tokens_by_modality.items():
             self.input_by_modality[modality] = self.input_by_modality.get(modality, 0) + tokens
-        for modality, tokens in rec.output_modality_tokens.items():
+        for modality, tokens in output_tokens_by_modality.items():
             self.output_by_modality[modality] = self.output_by_modality.get(modality, 0) + tokens
-        in_cost, out_cost = estimate_cost_breakdown(
+        in_costs, out_costs = estimate_cost_by_modality(
             self._price_of(rec.provider_model),
-            rec.input_modality_tokens,
-            rec.output_modality_tokens,
+            input_tokens_by_modality,
+            output_tokens_by_modality,
             rec.input_tokens,
             rec.output_tokens,
         )
+        in_cost = sum(in_costs.values())
+        out_cost = sum(out_costs.values())
         self.input_cost += in_cost
         self.output_cost += out_cost
+        for modality, cost in in_costs.items():
+            self.input_cost_by_modality[modality] = (
+                self.input_cost_by_modality.get(modality, 0.0) + cost
+            )
+        for modality, cost in out_costs.items():
+            self.output_cost_by_modality[modality] = (
+                self.output_cost_by_modality.get(modality, 0.0) + cost
+            )
         if _is_embedding_record(rec):
             self.embedding_cost += in_cost + out_cost
+
+    @staticmethod
+    def _token_cost_breakdown(
+        total_tokens: int,
+        total_cost: float,
+        tokens_by_modality: dict[str, int],
+        cost_by_modality: dict[str, float],
+    ) -> dict[str, TokenCostBreakdown]:
+        out = {
+            "total": TokenCostBreakdown(
+                tokens=total_tokens,
+                total_cost=round(total_cost, _COST_DP),
+            )
+        }
+        for modality in sorted(tokens_by_modality):
+            out[modality] = TokenCostBreakdown(
+                tokens=tokens_by_modality[modality],
+                total_cost=round(cost_by_modality.get(modality, 0.0), _COST_DP),
+            )
+        return out
 
     def to_aggregate(self) -> UsageAggregate:
         avg, p50 = _latency_stats(self.latencies)
         return UsageAggregate(
             requests=self.requests,
             failed_requests=self.failed_requests,
-            input_tokens=self.input_tokens,
-            output_tokens=self.output_tokens,
+            input_tokens=self._token_cost_breakdown(
+                self.input_tokens,
+                self.input_cost,
+                self.input_by_modality,
+                self.input_cost_by_modality,
+            ),
+            output_tokens=self._token_cost_breakdown(
+                self.output_tokens,
+                self.output_cost,
+                self.output_by_modality,
+                self.output_cost_by_modality,
+            ),
             total_tokens=self.total_tokens,
             input_by_modality=dict(self.input_by_modality),
             output_by_modality=dict(self.output_by_modality),

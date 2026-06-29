@@ -715,8 +715,15 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
   "totals": {
     "requests": 2,
     "failed_requests": 0,
-    "input_tokens": 2000000,
-    "output_tokens": 2000000,
+    "input_tokens": {
+      "total": { "tokens": 2000000, "total_cost": 0.5 },
+      "text": { "tokens": 1800000, "total_cost": 0.44 },
+      "image": { "tokens": 200000, "total_cost": 0.06 }
+    },
+    "output_tokens": {
+      "total": { "tokens": 2000000, "total_cost": 3.75 },
+      "text": { "tokens": 2000000, "total_cost": 3.75 }
+    },
     "total_tokens": 4000000,
     "input_by_modality": { "text": 1800000, "image": 200000 },
     "output_by_modality": { "text": 2000000 },
@@ -726,8 +733,8 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
     "latency_ms_p50": 740.0
   },
   "by_provider": {
-    "gemini": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 2.80, "...": "..." },
-    "openai": { "requests": 1, "input_tokens": 1000000, "estimated_cost_usd": 1.45, "...": "..." }
+    "gemini": { "requests": 1, "input_tokens": { "total": { "tokens": 1000000, "total_cost": 0.3 }, "...": "..." }, "estimated_cost_usd": 2.80 },
+    "openai": { "requests": 1, "input_tokens": { "total": { "tokens": 1000000, "total_cost": 0.2 }, "...": "..." }, "estimated_cost_usd": 1.45 }
   },
   "by_model": {
     "gemini-2.5-flash": { "requests": 1, "estimated_cost_usd": 2.80, "...": "..." },
@@ -739,6 +746,12 @@ curl "http://localhost:8081/v1/usage?provider=gemini&interval=day&start=2026-05-
 
 When `interval` is given, `buckets` is a time-series (one entry per period) with
 the same `totals` + `by_provider` + `by_model` shape.
+
+In `/v1/usage`, each aggregate's `input_tokens` and `output_tokens` are
+directional token/cost breakdowns. They always include `total`, plus any
+reported modalities such as `text`, `image`, or `audio`; each bucket contains
+`tokens` and `total_cost`. The legacy `input_by_modality` /
+`output_by_modality` count-only maps remain for compact modality totals.
 
 ### `GET /v1/usage/summary`
 

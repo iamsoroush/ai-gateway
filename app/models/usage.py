@@ -56,14 +56,21 @@ class RequestRecord(BaseModel):
     user_agent: str | None = None
 
 
+class TokenCostBreakdown(BaseModel):
+    """Token count plus computed cost for one token direction/modality bucket."""
+
+    tokens: int = 0
+    total_cost: float = 0.0
+
+
 class UsageAggregate(BaseModel):
     """Summed usage for a scope (overall, a provider, or a time bucket)."""
 
     requests: int = 0
     # Subset of ``requests`` that errored (success count = requests - failed_requests).
     failed_requests: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
+    input_tokens: dict[str, TokenCostBreakdown] = Field(default_factory=dict)
+    output_tokens: dict[str, TokenCostBreakdown] = Field(default_factory=dict)
     total_tokens: int = 0
     input_by_modality: dict[str, int] = Field(default_factory=dict)
     output_by_modality: dict[str, int] = Field(default_factory=dict)
