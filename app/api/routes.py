@@ -26,6 +26,8 @@ from app.models.openai_contract import (
     ChatCompletionRequest,
     ChatCompletionResponse,
     Choice,
+    EmbeddingRequest,
+    EmbeddingResponse,
     ModelCard,
     ModelList,
     ResponseMessage,
@@ -223,6 +225,19 @@ def _build_response(
     )
 
 
+def _embedding_usage(usage) -> CanonicalUsage | None:
+    if usage is None:
+        return None
+    prompt_tokens = usage.prompt_tokens or 0
+    return CanonicalUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        total_tokens=usage.total_tokens or prompt_tokens,
+        input_modality_tokens={"text": prompt_tokens} if prompt_tokens else None,
+        output_modality_tokens=None,
+    )
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(body: ChatCompletionRequest, request: Request):
     request_id = request.headers.get("x-request-id") or new_request_id()
@@ -306,6 +321,58 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         _record_request_safely(request, _error_record(ctx, canonical, exc, latency))
         logger.exception(
             "chat.completions.error",
+            extra={"context": {"request_id": request_id, "status": "error"}},
+        )
+        raise
+
+
+@router.post("/v1/embeddings", response_model=EmbeddingResponse)
+async def embeddings(body: EmbeddingRequest, request: Request) -> EmbeddingResponse:
+    request_id = request.headers.get("x-request-id") or new_request_id()
+    client_ip, user_agent = _client_info(request)
+    ctx = _ReqCtx(
+        request_id=request_id,
+        started=time.perf_counter(),
+        client_ip=client_ip,
+        user_agent=user_agent,
+        has_image=False,
+        has_audio=False,
+        requested_model=body.model,
+        stream=False,
+        pricing=request.app.state.pricing,
+    )
+    canonical = CanonicalLLMRequest(
+        model_alias=body.model,
+        provider="openai",
+        provider_model=body.model,
+        messages=[],
+    )
+    try:
+        provider = _provider_router(request).get("openai")
+        provider.ensure_ready()
+        result = await provider.embeddings(body)  # type: ignore[attr-defined]
+        latency = _elapsed_ms(ctx.started)
+        _record_request_safely(
+            request,
+            _success_record(ctx, canonical, _embedding_usage(result.usage), latency),
+        )
+        logger.info(
+            "embeddings.done",
+            extra={
+                "context": {
+                    "request_id": request_id,
+                    "provider": "openai",
+                    "provider_model": body.model,
+                    "latency_ms": latency,
+                }
+            },
+        )
+        return result
+    except Exception as exc:
+        latency = _elapsed_ms(ctx.started)
+        _record_request_safely(request, _error_record(ctx, canonical, exc, latency))
+        logger.exception(
+            "embeddings.error",
             extra={"context": {"request_id": request_id, "status": "error"}},
         )
         raise

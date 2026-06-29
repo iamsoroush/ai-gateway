@@ -128,3 +128,41 @@ class ModelCard(BaseModel):
 class ModelList(BaseModel):
     object: Literal["list"] = "list"
     data: list[ModelCard]
+
+
+# --------------------------------------------------------------------------- #
+# Embeddings                                                                  #
+# --------------------------------------------------------------------------- #
+
+
+EmbeddingInput = Union[str, list[str], list[int], list[list[int]]]
+
+
+class EmbeddingRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=(), extra="ignore")
+
+    model: str
+    input: EmbeddingInput
+    encoding_format: Literal["float", "base64"] | None = None
+    dimensions: int | None = Field(default=None, ge=1)
+    user: str | None = None
+
+
+class EmbeddingData(BaseModel):
+    object: Literal["embedding"] = "embedding"
+    embedding: list[float] | str
+    index: int
+
+
+class EmbeddingUsage(BaseModel):
+    prompt_tokens: int = 0
+    total_tokens: int = 0
+
+
+class EmbeddingResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    object: Literal["list"] = "list"
+    data: list[EmbeddingData]
+    model: str
+    usage: EmbeddingUsage | None = None

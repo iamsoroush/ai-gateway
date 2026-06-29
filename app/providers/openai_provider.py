@@ -19,6 +19,12 @@ from app.models.canonical import (
     StreamEvent,
 )
 from app.models.errors import MissingAPIKeyError, ProviderRequestError
+from app.models.openai_contract import (
+    EmbeddingData,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    EmbeddingUsage,
+)
 from app.providers.base import BaseLLMProvider
 from app.utils.media import fetch_bytes
 
@@ -141,6 +147,16 @@ class OpenAIProvider(BaseLLMProvider):
             kwargs["reasoning_effort"] = request.reasoning_effort
         return kwargs
 
+    def _build_embedding_kwargs(self, request: EmbeddingRequest) -> dict:
+        kwargs: dict[str, Any] = {"model": request.model, "input": request.input}
+        if request.encoding_format is not None:
+            kwargs["encoding_format"] = request.encoding_format
+        if request.dimensions is not None:
+            kwargs["dimensions"] = request.dimensions
+        if request.user is not None:
+            kwargs["user"] = request.user
+        return kwargs
+
     async def complete(self, request: CanonicalLLMRequest) -> CanonicalLLMResponse:
         client = self._get_client()
         messages = await self._to_openai_messages(request.messages)
@@ -179,3 +195,31 @@ class OpenAIProvider(BaseLLMProvider):
                     yield StreamEvent(usage=_to_canonical_usage(chunk.usage))
         except Exception as exc:
             raise ProviderRequestError(f"OpenAI stream interrupted: {exc}") from exc
+
+    async def embeddings(self, request: EmbeddingRequest) -> EmbeddingResponse:
+        client = self._get_client()
+        try:
+            resp = await client.embeddings.create(**self._build_embedding_kwargs(request))
+        except Exception as exc:
+            raise ProviderRequestError(f"OpenAI embeddings request failed: {exc}") from exc
+
+        usage = getattr(resp, "usage", None)
+        return EmbeddingResponse(
+            data=[
+                EmbeddingData(
+                    object=getattr(item, "object", "embedding"),
+                    embedding=item.embedding,
+                    index=item.index,
+                )
+                for item in resp.data
+            ],
+            model=getattr(resp, "model", request.model),
+            usage=(
+                EmbeddingUsage(
+                    prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                    total_tokens=getattr(usage, "total_tokens", 0) or 0,
+                )
+                if usage is not None
+                else None
+            ),
+        )

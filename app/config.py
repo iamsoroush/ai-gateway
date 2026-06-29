@@ -58,6 +58,7 @@ MODEL_REGISTRY: dict[str, dict[str, str]] = {
 # this separate from MODEL_REGISTRY (caller-friendly aliases) and PRICING (cost
 # metadata): neither is an authoritative catalog of selectable models.
 # Date-pinned and specialist image/TTS/search models are intentionally omitted.
+# Embedding models are included because the gateway exposes /v1/embeddings.
 MODEL_CATALOG: dict[str, str] = {
     # OpenAI
     "gpt-5": "openai",
@@ -69,6 +70,9 @@ MODEL_CATALOG: dict[str, str] = {
     "gpt-5.4-pro": "openai",
     "gpt-5.5": "openai",
     "gpt-5.5-pro": "openai",
+    "text-embedding-3-small": "openai",
+    "text-embedding-3-large": "openai",
+    "text-embedding-ada-002": "openai",
     # Google Gemini
     "gemini-2.5-pro": "gemini",
     "gemini-2.5-flash": "gemini",
@@ -84,7 +88,10 @@ MODEL_CATALOG: dict[str, str] = {
 # provider is inferred from the model name prefix. Order matters: the first
 # matching provider wins. Extend this list as new providers/models appear.
 PROVIDER_NAME_PREFIXES: list[tuple[tuple[str, ...], str]] = [
-    (("gpt", "o1", "o3", "o4", "chatgpt", "davinci", "babbage"), "openai"),
+    (
+        ("gpt", "o1", "o3", "o4", "chatgpt", "davinci", "babbage", "text-embedding"),
+        "openai",
+    ),
     (("gemini", "gemma", "models/gemini"), "gemini"),
 ]
 
@@ -142,6 +149,10 @@ PRICING: dict[str, dict] = {
     "gpt-5.4-pro": {"input": 30.00, "output": 180.00},
     "gpt-5.5": {"input": 5.00, "output": 30.00},  # latest flagship (Apr 2026)
     "gpt-5.5-pro": {"input": 30.00, "output": 180.00},
+    # OpenAI embeddings — input-only pricing.
+    "text-embedding-3-small": {"input": 0.02, "output": 0.00},
+    "text-embedding-3-large": {"input": 0.13, "output": 0.00},
+    "text-embedding-ada-002": {"input": 0.10, "output": 0.00},
     # Google — Gemini 2.5+ family (audio priced above text on the input side;
     # *-pro rates are the <=200k-token tier — the larger-context tier isn't modeled here).
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00},

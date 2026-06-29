@@ -40,6 +40,7 @@ The FastAPI route never contains provider-specific logic — it depends only on 
 ## Features
 
 - OpenAI-compatible `POST /v1/chat/completions` (streaming and non-streaming)
+- OpenAI-compatible `POST /v1/embeddings` backed by OpenAI embedding models
 - Providers: **OpenAI** and **Google Gemini**
 - Multimodal input: text, image URL/data URI, audio URL, and base64 `input_audio`
 - **Structured output**: constrain responses to JSON or a JSON Schema via OpenAI's
@@ -151,6 +152,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8081 --reload
 | GET    | `/health`              | Liveness check                                |
 | GET    | `/v1/models`           | List aliases and callable provider models      |
 | POST   | `/v1/chat/completions` | OpenAI-compatible chat completion             |
+| POST   | `/v1/embeddings`       | OpenAI-compatible embeddings via OpenAI       |
 | GET    | `/v1/usage`            | Token usage by provider + modality, with cost, failures + latency |
 | GET    | `/v1/usage/summary`    | Overall usage totals + estimated cost + failures + latency |
 | GET    | `/v1/requests`         | List individual request records (newest first), filterable |
@@ -205,18 +207,19 @@ The `model` field of a chat request accepts **any** of the following:
 > unsupported_content_type`. Use a Gemini model for audio — which is exactly why
 > the no-`model` audio default is `gemini-2.5-flash`.
 
-`GET /v1/models` lists registered aliases plus a curated set of callable,
-general-purpose raw model IDs. Other raw pass-through names may still work when
-their provider can be inferred, but specialist and date-pinned variants are not enumerated.
+`GET /v1/models` lists registered aliases plus a curated set of callable raw
+model IDs, including OpenAI embedding models. Other raw pass-through names may
+still work when their provider can be inferred, but specialist and date-pinned
+variants are not enumerated.
 
 ## Typed client (recommended)
 
 You don't need a custom client to get clean, typed responses. Because the gateway
 is OpenAI-compatible, the **official `openai` Python SDK** works against it
 unchanged and returns OpenAI's own typed Pydantic models (`ChatCompletion`,
-`ChatCompletionChunk`) — the same objects you'd get from OpenAI directly, whether
-the gateway routes your request to OpenAI or Gemini. One standard SDK for every
-backend behind the gateway.
+`ChatCompletionChunk`, embedding responses, etc.) — the same objects you'd get
+from OpenAI directly, whether the gateway routes your chat request to OpenAI or
+Gemini. One standard SDK for every backend behind the gateway.
 
 ```python
 from openai import OpenAI
@@ -239,6 +242,13 @@ for chunk in client.chat.completions.create(
 ):
     if chunk.choices[0].delta.content:
         print(chunk.choices[0].delta.content, end="", flush=True)
+
+# embeddings -> OpenAI embedding response, currently backed by OpenAI only
+emb = client.embeddings.create(
+    model="text-embedding-3-small",
+    input="A short report sentence.",
+)
+print(len(emb.data[0].embedding))
 ```
 
 Runnable: [`examples/openai_sdk_client.py`](examples/openai_sdk_client.py)

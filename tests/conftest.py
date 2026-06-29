@@ -19,6 +19,12 @@ from app.models.canonical import (
     StreamEvent,
 )
 from app.models.errors import ProviderRequestError
+from app.models.openai_contract import (
+    EmbeddingData,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    EmbeddingUsage,
+)
 from app.providers.base import BaseLLMProvider
 from app.services.request_store import InMemoryRequestStore
 
@@ -45,6 +51,13 @@ class FakeProvider(BaseLLMProvider):
         # Terminal usage event so streaming requests are accounted for.
         yield StreamEvent(
             usage=CanonicalUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5)
+        )
+
+    async def embeddings(self, request: EmbeddingRequest) -> EmbeddingResponse:
+        return EmbeddingResponse(
+            data=[EmbeddingData(embedding=[0.1, 0.2, 0.3], index=0)],
+            model=request.model,
+            usage=EmbeddingUsage(prompt_tokens=4, total_tokens=4),
         )
 
 
