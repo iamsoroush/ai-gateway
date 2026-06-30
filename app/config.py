@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
+    gateway_api_key: str | None = None
     log_level: str = "INFO"
     # Used when a request omits "model". If the request carries audio we pick the
     # audio-capable default; otherwise the general default.

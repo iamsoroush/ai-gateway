@@ -7,6 +7,8 @@ error in the consistent ``{"error": {...}}`` envelope.
 
 from __future__ import annotations
 
+import secrets
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -40,6 +42,31 @@ app.state.pricing = PricingService(
     source_url=settings.pricing_source_url,
     refresh_seconds=settings.pricing_refresh_seconds,
 )
+
+
+@app.middleware("http")
+async def require_gateway_api_key(request: Request, call_next):
+    if not settings.gateway_api_key:
+        return await call_next(request)
+
+    expected = f"Bearer {settings.gateway_api_key}"
+    supplied = request.headers.get("authorization") or ""
+    if not secrets.compare_digest(supplied, expected):
+        body = ErrorResponse(
+            error=ErrorBody(
+                message="Missing or invalid API key.",
+                type="authentication_error",
+                code="invalid_api_key",
+            )
+        )
+        return JSONResponse(
+            status_code=401,
+            content=body.model_dump(),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return await call_next(request)
+
 
 app.include_router(router)
 

@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+import app.main as app_main
 from app.models.canonical import (
     CanonicalLLMRequest,
     CanonicalLLMResponse,
@@ -27,6 +28,8 @@ from app.models.openai_contract import (
 )
 from app.providers.base import BaseLLMProvider
 from app.services.request_store import InMemoryRequestStore
+
+app_main.settings.gateway_api_key = None
 
 
 class FakeProvider(BaseLLMProvider):
